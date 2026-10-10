@@ -1,0 +1,37 @@
+services:
+  admin:
+    build:
+      context: .
+      dockerfile: deploy/admin.Containerfile
+    image: ghcr.io/willwagner/jobs.willwagner.me:${VERSION:-local}
+    environment:
+      JOBS_ADMIN_ADDR: ":8081"
+      JOBS_DB_PATH: /data/jobs.sqlite3
+      JOBS_ADMIN_TOKEN: ${JOBS_ADMIN_TOKEN:?set JOBS_ADMIN_TOKEN}
+      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-}
+      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-}
+      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-}
+      JOBS_SMTP_FROM: jobs@willwagner.me
+    volumes:
+      - jobs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - admin
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+
+volumes:
+  jobs-data:
