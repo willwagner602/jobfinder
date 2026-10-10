@@ -127,6 +127,8 @@ func applyMigration(ctx context.Context, tx *sql.Tx, version int) error {
 		return execAll(ctx, tx, migration1)
 	case 2:
 		return execAll(ctx, tx, migration2)
+	case 3:
+		return execAll(ctx, tx, migration3)
 	default:
 		return fmt.Errorf("no migration for version %d", version)
 	}
@@ -256,6 +258,26 @@ var migration2 = []string{
 	`CREATE INDEX IF NOT EXISTS idx_job_matches_user_created ON job_matches(user_id, created_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_job_history_service_started ON job_history(service, started_at)`,
 	`INSERT INTO schema_migrations(version) VALUES (2)`,
+}
+
+var migration3 = []string{
+	`DROP INDEX IF EXISTS idx_job_boards_status`,
+	`CREATE TABLE job_boards_v3 (
+		board_id INTEGER PRIMARY KEY,
+		board_url TEXT NOT NULL UNIQUE,
+		company TEXT NOT NULL,
+		ats_type TEXT,
+		status TEXT NOT NULL DEFAULT 'discovered' CHECK (status IN ('discovered','active','unsupported')),
+		metadata_json TEXT NOT NULL DEFAULT '{}',
+		discovered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`,
+	`INSERT INTO job_boards_v3 (board_id, board_url, company, ats_type, status, metadata_json, discovered_at, updated_at)
+		SELECT board_id, board_url, company, ats_type, status, metadata_json, discovered_at, updated_at FROM job_boards`,
+	`DROP TABLE job_boards`,
+	`ALTER TABLE job_boards_v3 RENAME TO job_boards`,
+	`CREATE INDEX IF NOT EXISTS idx_job_boards_status ON job_boards(status)`,
+	`INSERT INTO schema_migrations(version) VALUES (3)`,
 }
 
 type ListingVersionInput struct {

@@ -8,7 +8,7 @@ import (
 )
 
 // CurrentVersion is the schema version expected by all services in this build.
-const CurrentVersion = 2
+const CurrentVersion = 3
 
 type ProcessStatus string
 
@@ -21,6 +21,7 @@ const (
 type BoardStatus string
 
 const (
+	BoardStatusDiscovered  BoardStatus = "discovered"
 	BoardStatusActive      BoardStatus = "active"
 	BoardStatusUnsupported BoardStatus = "unsupported"
 )
