@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("not found")
+	ErrNotFound     = errors.New("not found")
 	ErrTokenRevoked = errors.New("token revoked")
 )
 
