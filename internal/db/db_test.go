@@ -32,6 +32,9 @@ func TestEnsureCurrentUpgradesPreviousSchema(t *testing.T) {
 	if _, err := conn.Exec(string(fixture)); err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
+	if _, err := conn.Exec(`INSERT INTO job_boards(board_id, board_url, company, ats_type, status) VALUES (2, 'https://unsupported.example/jobs', 'Unsupported', 'custom', 'unsupported')`); err != nil {
+		t.Fatalf("add unsupported fixture board: %v", err)
+	}
 	if err := EnsureCurrent(context.Background(), conn); err != nil {
 		t.Fatalf("EnsureCurrent: %v", err)
 	}
@@ -39,12 +42,21 @@ func TestEnsureCurrentUpgradesPreviousSchema(t *testing.T) {
 	assertIndexExists(t, conn, "idx_job_history_service_started")
 	assertNoForeignKeyViolations(t, conn)
 
-	var boards int
-	if err := conn.QueryRow(`SELECT count(*) FROM job_boards WHERE board_url = 'https://example.com/jobs'`).Scan(&boards); err != nil {
-		t.Fatal(err)
-	}
-	if boards != 1 {
-		t.Fatalf("upgrade did not preserve fixture board, got %d", boards)
+	for boardURL, want := range map[string]struct {
+		id     int64
+		status schema.BoardStatus
+	}{
+		"https://example.com/jobs":     {id: 1, status: schema.BoardStatusActive},
+		"https://unsupported.example/jobs": {id: 2, status: schema.BoardStatusUnsupported},
+	} {
+		var boardID int64
+		var boardStatus string
+		if err := conn.QueryRow(`SELECT board_id, status FROM job_boards WHERE board_url = ?`, boardURL).Scan(&boardID, &boardStatus); err != nil {
+			t.Fatal(err)
+		}
+		if boardID != want.id || boardStatus != string(want.status) {
+			t.Fatalf("upgrade did not preserve fixture board identity/status for %s: id=%d status=%q", boardURL, boardID, boardStatus)
+		}
 	}
 	var versionFoundAt, versionBody, versionHash string
 	if err := conn.QueryRow(`SELECT found_at, body_text, content_hash FROM job_listing_versions WHERE job_listing_id = 1 AND version = 1`).Scan(&versionFoundAt, &versionBody, &versionHash); err != nil {
@@ -169,6 +181,28 @@ func TestUniquenessAndChecks(t *testing.T) {
 	}
 	if _, err := conn.Exec(`INSERT INTO job_history(service, started_at, status, items_processed) VALUES (?, ?, ?, ?)`, "svc", time.Now().UTC().Format(time.RFC3339), "unknown", 1); err == nil {
 		t.Fatal("invalid process status succeeded")
+	}
+
+	res, err := conn.Exec(`INSERT INTO job_boards(board_url, company, ats_type) VALUES (?, ?, ?)`, "https://default.example/jobs", "Default", "greenhouse")
+	if err != nil {
+		t.Fatalf("insert default board status: %v", err)
+	}
+	defaultBoardID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaultStatus string
+	if err := conn.QueryRow(`SELECT status FROM job_boards WHERE board_id = ?`, defaultBoardID).Scan(&defaultStatus); err != nil {
+		t.Fatal(err)
+	}
+	if defaultStatus != string(schema.BoardStatusDiscovered) {
+		t.Fatalf("default board status = %q, want %q", defaultStatus, schema.BoardStatusDiscovered)
+	}
+	if _, err := conn.Exec(`INSERT INTO job_boards(board_url, company, ats_type, status) VALUES (?, ?, ?, ?)`, "https://discovered.example/jobs", "Discovered", "lever", schema.BoardStatusDiscovered); err != nil {
+		t.Fatalf("discovered board status rejected: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO job_boards(board_url, company, ats_type, status) VALUES (?, ?, ?, ?)`, "https://invalid.example/jobs", "Invalid", "lever", "pending"); err == nil {
+		t.Fatal("invalid board status succeeded")
 	}
 }
 
