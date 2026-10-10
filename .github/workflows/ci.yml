@@ -22,12 +22,10 @@ jobs:
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
           git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -qx VERSION
-      - name: Test suite and admin service coverage
+      - name: Test suite and per-service coverage
         run: |
           go test ./...
-          go test ./internal/admin -coverprofile=coverage.out
-          go tool cover -func=coverage.out | tee coverage.txt
-          awk '/^total:/ { sub(/%/, "", $3); if ($3+0 < 90) exit 1 }' coverage.txt
+          bash deploy/check-coverage.sh
       - name: Record tested commit tag
         if: github.event_name == 'push'
         run: |

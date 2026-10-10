@@ -30,4 +30,4 @@ Without SMTP settings, token issuance returns the token in the HTTP response and
 - `POST /admin/tokens/revoke`: revokes a token.
 - `GET /admin/process-history`: shows recent `job_history` rows, status counts, and error JSON.
 
-All admin routes except `/healthz` require `Authorization: Bearer $JOBS_ADMIN_TOKEN`.
+All admin routes except `/healthz` require `Authorization: Bearer <token>`. The configured `JOBS_ADMIN_TOKEN` is a bootstrap credential for initial setup and emergency access. Tokens issued through `/admin/tokens/issue` are also accepted by protected routes through database validation; revoking an issued token through `/admin/tokens/revoke` immediately removes that token's admin access without revoking the bootstrap credential.

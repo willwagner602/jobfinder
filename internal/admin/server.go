@@ -94,17 +94,24 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.AdminToken == "" {
-			http.Error(w, "admin token is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(s.AdminToken)) != 1 {
+		if !s.authorized(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if got == "" || got == r.Header.Get("Authorization") {
+		return false
+	}
+	if s.AdminToken != "" && subtle.ConstantTimeCompare([]byte(got), []byte(s.AdminToken)) == 1 {
+		return true
+	}
+	_, err := s.Store.ValidateToken(r.Context(), got)
+	return err == nil
 }
 
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
