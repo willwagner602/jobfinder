@@ -49,7 +49,7 @@ type Result struct {
 }
 
 func ProviderFor(ats string) (Provider, bool) {
-	switch strings.ToLower(strings.TrimSpace(ats)) {
+	switch normalizedATS(ats) {
 	case "greenhouse":
 		return GreenhouseProvider{}, true
 	case "lever":
@@ -63,9 +63,22 @@ func ProviderFor(ats string) (Provider, bool) {
 	case "climatebase":
 		return ClimatebaseProvider{}, true
 	case "hackernews", "hn":
-		return HackerNewsProvider{Cache: NewCommentCache()}, true
+		return HackerNewsProvider{}, true
 	default:
 		return nil, false
+	}
+}
+
+func normalizedATS(ats string) string {
+	return strings.ToLower(strings.TrimSpace(ats))
+}
+
+func isHackerNews(ats string) bool {
+	switch normalizedATS(ats) {
+	case "hackernews", "hn":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -391,12 +404,119 @@ func (ClimatebaseProvider) Fetch(ctx context.Context, client *http.Client, board
 }
 
 type CommentCache struct {
+	conn     *sql.DB
 	positive map[string]Listing
 	negative map[string]bool
 }
 
 func NewCommentCache() *CommentCache {
 	return &CommentCache{positive: map[string]Listing{}, negative: map[string]bool{}}
+}
+
+func NewDurableCommentCache(ctx context.Context, conn *sql.DB) (*CommentCache, error) {
+	if err := ensureCommentCacheTable(ctx, conn); err != nil {
+		return nil, err
+	}
+	return &CommentCache{conn: conn, positive: map[string]Listing{}, negative: map[string]bool{}}, nil
+}
+
+func ensureCommentCacheTable(ctx context.Context, conn *sql.DB) error {
+	_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS hn_comment_cache (
+		comment_id TEXT PRIMARY KEY,
+		is_positive INTEGER NOT NULL CHECK (is_positive IN (0,1)),
+		canonical_url TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT '',
+		body_html TEXT NOT NULL DEFAULT '',
+		metadata_json TEXT NOT NULL DEFAULT '{}',
+		first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`)
+	return err
+}
+
+func (c *CommentCache) Lookup(ctx context.Context, commentID string) (Listing, bool, bool, error) {
+	if c == nil {
+		return Listing{}, false, false, nil
+	}
+	if listing, ok := c.positive[commentID]; ok {
+		return listing, true, true, nil
+	}
+	if c.negative[commentID] {
+		return Listing{}, false, true, nil
+	}
+	if c.conn == nil {
+		return Listing{}, false, false, nil
+	}
+	var isPositive int
+	var listing Listing
+	var metadataJSON string
+	err := c.conn.QueryRowContext(ctx, `SELECT is_positive, canonical_url, title, body_html, metadata_json FROM hn_comment_cache WHERE comment_id = ?`, commentID).Scan(&isPositive, &listing.CanonicalURL, &listing.Title, &listing.BodyHTML, &metadataJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Listing{}, false, false, nil
+	}
+	if err != nil {
+		return Listing{}, false, false, err
+	}
+	if _, err := c.conn.ExecContext(ctx, `UPDATE hn_comment_cache SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE comment_id = ?`, commentID); err != nil {
+		return Listing{}, false, false, err
+	}
+	if isPositive == 0 {
+		c.negative[commentID] = true
+		return Listing{}, false, true, nil
+	}
+	if metadataJSON != "" {
+		if err := json.Unmarshal([]byte(metadataJSON), &listing.Metadata); err != nil {
+			return Listing{}, false, false, err
+		}
+	}
+	c.positive[commentID] = listing
+	return listing, true, true, nil
+}
+
+func (c *CommentCache) StorePositive(ctx context.Context, commentID string, listing Listing) error {
+	if c == nil {
+		return nil
+	}
+	c.positive[commentID] = listing
+	delete(c.negative, commentID)
+	if c.conn == nil {
+		return nil
+	}
+	metadata, err := json.Marshal(listing.Metadata)
+	if err != nil {
+		return err
+	}
+	_, err = c.conn.ExecContext(ctx, `INSERT INTO hn_comment_cache (comment_id, is_positive, canonical_url, title, body_html, metadata_json)
+		VALUES (?, 1, ?, ?, ?, ?)
+		ON CONFLICT(comment_id) DO UPDATE SET
+			is_positive = 1,
+			canonical_url = excluded.canonical_url,
+			title = excluded.title,
+			body_html = excluded.body_html,
+			metadata_json = excluded.metadata_json,
+			last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, commentID, listing.CanonicalURL, listing.Title, listing.BodyHTML, string(metadata))
+	return err
+}
+
+func (c *CommentCache) StoreNegative(ctx context.Context, commentID string) error {
+	if c == nil {
+		return nil
+	}
+	c.negative[commentID] = true
+	delete(c.positive, commentID)
+	if c.conn == nil {
+		return nil
+	}
+	_, err := c.conn.ExecContext(ctx, `INSERT INTO hn_comment_cache (comment_id, is_positive)
+		VALUES (?, 0)
+		ON CONFLICT(comment_id) DO UPDATE SET
+			is_positive = 0,
+			canonical_url = '',
+			title = '',
+			body_html = '',
+			metadata_json = '{}',
+			last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, commentID)
+	return err
 }
 
 // HackerNewsProvider scrapes Who's Hiring comments and caches both matches and misses by comment id.
@@ -413,19 +533,26 @@ func (p HackerNewsProvider) Fetch(ctx context.Context, client *http.Client, boar
 	comments := parseHNComments(body)
 	out := make([]Listing, 0, len(comments))
 	for _, comment := range comments {
-		if cached, ok := p.Cache.positive[comment.ID]; ok {
-			out = append(out, cached)
-			continue
+		cached, positive, found, err := p.Cache.Lookup(ctx, comment.ID)
+		if err != nil {
+			return nil, err
 		}
-		if p.Cache.negative[comment.ID] {
+		if found {
+			if positive {
+				out = append(out, cached)
+			}
 			continue
 		}
 		listing, ok := listingFromHNComment(comment)
 		if !ok {
-			p.Cache.negative[comment.ID] = true
+			if err := p.Cache.StoreNegative(ctx, comment.ID); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		p.Cache.positive[comment.ID] = listing
+		if err := p.Cache.StorePositive(ctx, comment.ID, listing); err != nil {
+			return nil, err
+		}
 		out = append(out, listing)
 	}
 	return out, nil
@@ -493,12 +620,19 @@ func Run(ctx context.Context, conn *sql.DB, client *http.Client, since time.Time
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	hnCache, err := NewDurableCommentCache(ctx, conn)
+	if err != nil {
+		return Result{}, err
+	}
 	var total Result
 	for _, board := range boards {
 		provider, ok := ProviderFor(board.ATSType)
 		if !ok {
 			total.Errors = append(total.Errors, fmt.Sprintf("board %d unsupported ats_type %q", board.ID, board.ATSType))
 			continue
+		}
+		if isHackerNews(board.ATSType) {
+			provider = HackerNewsProvider{Cache: hnCache}
 		}
 		res, err := IngestBoard(ctx, conn, client, board, since, provider)
 		if err != nil {
