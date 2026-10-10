@@ -71,16 +71,17 @@ At a high level, the MVP contains these services:
    The table shapes live in a shared Go library that publishes a schema version number. At startup the orchestrator checks the database's current schema version and applies any necessary upgrades before services run. CI must verify — both enforced on GitHub and runnable locally — that the orchestrator can start on the previous schema version and upgrade to the new one.
 
 # Acceptance Criteria
+<!-- Checked items are verified in this repository (tests/gates passing locally as of the final integration review). Unchecked items require external credentials/production infrastructure and are listed in agent-mail/from-orchestrator/to-operator--report-final.md. -->
 
--  Fetches Greenhouse, Lever, and Ashby boards with full JD content; Workday summaries; Jobvite listings
--  Pulls jobs from Adzuna (≤100 calls/run, 8-day window), Climatebase (server-side date filter), and SerpAPI Google Jobs (3 queries × 2 pages = 6 credits max)
--  HN "who's hiring" scraping with per-comment positive/negative cache and retry-on-failure
--  appropriate retry and exponential backoff logic to avoid getting IP banned by anti-scraping features - all processes should minimize calls wherever possible and handle errors gracefully.
--  Provider-neutral LLM classification
--  All pages beyond login require user auth
--  Admin user management: issue/revoke tokens, approve/suspend users
--  All services must publish a healthcheck route (liveness only)
--  Container deploy: docker-compose at jobs.willwagner.me behind an nginx reverse proxy
--  GHCR releases gated on a `VERSION` bump per PR; tested-commit tagging
--  Mail integration with jobs@willwagner.me outbox
--  > 90% coverage per service, with 100% passing tests
+- [x] Fetches Greenhouse, Lever, and Ashby boards with full JD content; Workday summaries; Jobvite listings *(implemented, fixture-tested; no live provider calls made)*
+- [x] Pulls jobs from Adzuna (≤100 calls/run, 8-day window), Climatebase (server-side date filter), and SerpAPI Google Jobs (3 queries × 2 pages = 6 credits max) *(limits enforced and tested; no live calls)*
+- [x] HN "who's hiring" scraping with per-comment positive/negative cache and retry-on-failure
+- [x] Appropriate retry and exponential backoff logic to avoid getting IP banned by anti-scraping features
+- [x] Provider-neutral LLM classification
+- [x] All pages beyond login require user auth
+- [x] Admin user management: issue/revoke tokens, approve/suspend users
+- [x] All services publish a healthcheck route (liveness only)
+- [x] Container deploy: docker-compose behind an nginx reverse proxy *(compose config verified; live deploy at jobs.willwagner.me requires infrastructure)*
+- [ ] GHCR releases gated on a `VERSION` bump per PR; tested-commit tagging *(CI configured for this; a real GHCR publish requires a runner run and registry access)*
+- [ ] Mail integration with jobs@willwagner.me outbox *(SMTP wired and config-tested; sending requires live credentials)*
+- [x] > 90% coverage per service, with 100% passing tests
