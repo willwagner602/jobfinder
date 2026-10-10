@@ -196,13 +196,17 @@ type listingVersion struct {
 func (e Engine) loadUsers(ctx context.Context) ([]userConfig, error) {
 	rows, err := e.DB.QueryContext(ctx, `SELECT u.user_id, coalesce(c.resume_text,''), coalesce(c.experience_text,''), coalesce(c.desired_titles_json,'[]'), coalesce(c.blocked_companies_json,'[]'), coalesce(c.matcher_name,'')
 		FROM users u JOIN user_configs c ON c.user_id = u.user_id WHERE u.status = ?`, schema.UserStatusLive)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []userConfig
 	for rows.Next() {
 		var u userConfig
 		var desired, blocked string
-		if err := rows.Scan(&u.ID, &u.ResumeText, &u.ExperienceText, &desired, &blocked, &u.MatcherName); err != nil { return nil, err }
+		if err := rows.Scan(&u.ID, &u.ResumeText, &u.ExperienceText, &desired, &blocked, &u.MatcherName); err != nil {
+			return nil, err
+		}
 		u.DesiredTitles = decodeStringList(desired)
 		u.BlockedCompanies = decodeStringList(blocked)
 		out = append(out, u)
@@ -214,12 +218,16 @@ func (e Engine) loadListings(ctx context.Context) ([]listingVersion, error) {
 	rows, err := e.DB.QueryContext(ctx, `SELECT l.job_listing_id, l.current_version, v.title, b.company, v.body_text
 		FROM job_listings l JOIN job_listing_versions v ON v.job_listing_id = l.job_listing_id AND v.version = l.current_version
 		JOIN job_boards b ON b.board_id = l.board_id WHERE l.current_version > 0 ORDER BY l.job_listing_id`)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var out []listingVersion
 	for rows.Next() {
 		var l listingVersion
-		if err := rows.Scan(&l.ID, &l.Version, &l.Title, &l.Company, &l.BodyText); err != nil { return nil, err }
+		if err := rows.Scan(&l.ID, &l.Version, &l.Title, &l.Company, &l.BodyText); err != nil {
+			return nil, err
+		}
 		out = append(out, l)
 	}
 	return out, rows.Err()
@@ -228,26 +236,34 @@ func (e Engine) loadListings(ctx context.Context) ([]listingVersion, error) {
 func preclassifiedNoMatch(user userConfig, listing listingVersion) (Result, error) {
 	for _, blocked := range user.BlockedCompanies {
 		if strings.EqualFold(strings.TrimSpace(blocked), listing.Company) {
-			return Result{Decision: schema.JobMatchDecisionNoMatch, Data: mustJSON(map[string]string{"filtered_by":"blocked_company"})}, nil
+			return Result{Decision: schema.JobMatchDecisionNoMatch, Data: mustJSON(map[string]string{"filtered_by": "blocked_company"})}, nil
 		}
 	}
-	if len(user.DesiredTitles) == 0 { return Result{}, nil }
+	if len(user.DesiredTitles) == 0 {
+		return Result{}, nil
+	}
 	title := strings.ToLower(listing.Title)
 	for _, desired := range user.DesiredTitles {
 		if desired = strings.TrimSpace(strings.ToLower(desired)); desired != "" && strings.Contains(title, desired) {
 			return Result{}, nil
 		}
 	}
-	return Result{Decision: schema.JobMatchDecisionNoMatch, Data: mustJSON(map[string]string{"filtered_by":"desired_titles"})}, nil
+	return Result{Decision: schema.JobMatchDecisionNoMatch, Data: mustJSON(map[string]string{"filtered_by": "desired_titles"})}, nil
 }
 
 func (e Engine) persist(ctx context.Context, userID, listingID int64, version int, matcher string, result Result) error {
 	data := result.Data
-	if len(data) == 0 { data = json.RawMessage(`{}`) }
+	if len(data) == 0 {
+		data = json.RawMessage(`{}`)
+	}
 	metadata := result.Metadata
-	if len(metadata) == 0 { metadata = json.RawMessage(`{}`) }
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
 	var rating any
-	if result.Decision == schema.JobMatchDecisionMatch { rating = result.Rating }
+	if result.Decision == schema.JobMatchDecisionMatch {
+		rating = result.Rating
+	}
 	_, err := e.DB.ExecContext(ctx, `INSERT INTO job_matches (user_id, job_listing_id, job_listing_version, rating, decision, matcher_name, matcher_metadata_json, job_match_data_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, job_listing_id, job_listing_version, matcher_name) DO UPDATE SET
@@ -259,7 +275,9 @@ func (e Engine) persist(ctx context.Context, userID, listingID int64, version in
 func (e Engine) insertHistory(ctx context.Context, started, finished time.Time, status schema.ProcessStatus, summary Summary, errData any) error {
 	data := mustJSON(summary)
 	var errJSON any
-	if errData != nil { errJSON = string(mustJSON(errData)) }
+	if errData != nil {
+		errJSON = string(mustJSON(errData))
+	}
 	_, err := e.DB.ExecContext(ctx, `INSERT INTO job_history (service, started_at, finished_at, status, items_processed, data_json, error_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		ServiceName, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), status, summary.Processed, string(data), errJSON)
 	return err
@@ -267,11 +285,30 @@ func (e Engine) insertHistory(ctx context.Context, started, finished time.Time, 
 
 func (e Engine) options() Options {
 	o := e.Options
-	if o.DefaultMatcher == "" { o.DefaultMatcher = "jev" }
-	if o.MaxAttempts <= 0 { o.MaxAttempts = 3 }
-	if o.InitialBackoff <= 0 { o.InitialBackoff = time.Second }
-	if o.Sleep == nil { o.Sleep = func(ctx context.Context, d time.Duration) error { t := time.NewTimer(d); defer t.Stop(); select { case <-ctx.Done(): return ctx.Err(); case <-t.C: return nil } } }
-	if o.Now == nil { o.Now = func() time.Time { return time.Now().UTC() } }
+	if o.DefaultMatcher == "" {
+		o.DefaultMatcher = "jev"
+	}
+	if o.MaxAttempts <= 0 {
+		o.MaxAttempts = 3
+	}
+	if o.InitialBackoff <= 0 {
+		o.InitialBackoff = time.Second
+	}
+	if o.Sleep == nil {
+		o.Sleep = func(ctx context.Context, d time.Duration) error {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+				return nil
+			}
+		}
+	}
+	if o.Now == nil {
+		o.Now = func() time.Time { return time.Now().UTC() }
+	}
 	return o
 }
 
@@ -283,12 +320,16 @@ func alreadyMatched(ctx context.Context, conn *sql.DB, userID, listingID int64, 
 
 func decodeStringList(s string) []string {
 	var out []string
-	if err := json.Unmarshal([]byte(s), &out); err != nil { return nil }
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
 	return out
 }
 
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
-	if err != nil { return json.RawMessage(`{}`) }
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
 	return b
 }
