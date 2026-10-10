@@ -1,0 +1,13 @@
+{{template "header" .}}
+<h2>Profile and matching inputs</h2>
+<form method="post" action="/onboarding">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Resume text <textarea name="resume_text" rows="10">{{with .Profile}}{{.Resume}}{{end}}</textarea></label>
+  <label>Experience bullets <textarea name="experience_text" rows="8">{{with .Profile}}{{.Experience}}{{end}}</textarea></label>
+  <label>Desired titles, one per line <textarea name="desired_titles" rows="4">{{with .Profile}}{{.DesiredTitles}}{{end}}</textarea></label>
+  <label>Search preferences JSON or notes <textarea name="search_preferences" rows="4">{{with .Profile}}{{.SearchPreferences}}{{end}}</textarea></label>
+  <label>Blocked companies, one per line <textarea name="blocked_companies" rows="4">{{with .Profile}}{{.BlockedCompanies}}{{end}}</textarea></label>
+  <label>Matcher override <input name="matcher_name" value="{{with .Profile}}{{.MatcherName}}{{end}}"></label>
+  <button>Save and request prior-week match run</button>
+</form>
+{{template "footer" .}}

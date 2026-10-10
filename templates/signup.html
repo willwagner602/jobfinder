@@ -1,0 +1,10 @@
+{{template "header" .}}
+<h2>Create account</h2>
+<p>Enter your email and optionally a password. A confirmation code must be entered before the account can be used.</p>
+<form method="post" action="/signup">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Email <input type="email" name="email" required autocomplete="email"></label>
+  <label>Password <input type="password" name="password" autocomplete="new-password"></label>
+  <button>Create account and send code</button>
+</form>
+{{template "footer" .}}

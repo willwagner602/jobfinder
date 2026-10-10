@@ -1,0 +1,7 @@
+{{template "header" .}}
+<h2>{{.Job.Title}}</h2>
+<p><strong>Company:</strong> {{.Job.Company}}</p>
+<p><strong>Decision:</strong> {{.Job.Decision}}{{if .Job.Rating.Valid}} ({{.Job.Rating.Int64}}/5){{end}}</p>
+<p><a href="{{.Job.CanonicalURL}}">Original listing</a></p>
+<article><pre>{{.Job.Summary}}</pre></article>
+{{template "footer" .}}
