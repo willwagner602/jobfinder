@@ -85,6 +85,40 @@ func TestRunPersistsDiscoveredAndUnsupportedBoardsAndSynchronizesJSON(t *testing
 	}
 }
 
+func TestRunUpdatesAndDeduplicatesCandidates(t *testing.T) {
+	conn := testDB(t)
+	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	original := Candidate{Provider: "p", Identifier: "x", URL: "https://example.com/jobs", Company: "Old", Supported: false, DiscoveredAt: now}
+	if _, err := Run(context.Background(), conn, []Provider{fakeProvider{name: "p", candidates: []Candidate{original}}}, Config{JSONPath: filepath.Join(t.TempDir(), "boards.json"), Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	original.Company = "New"
+	res, err := Run(context.Background(), conn, []Provider{fakeProvider{name: "p", candidates: []Candidate{original, original}}}, Config{JSONPath: filepath.Join(t.TempDir(), "boards.json"), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Updated != 1 || res.Candidates != 2 {
+		t.Fatalf("result=%+v", res)
+	}
+	var company string
+	if err := conn.QueryRow(`SELECT company FROM job_boards`).Scan(&company); err != nil || company != "New" {
+		t.Fatalf("company=%q err=%v", company, err)
+	}
+}
+
+func TestRunValidationAndPersistenceErrors(t *testing.T) {
+	if _, err := Run(context.Background(), nil, []Provider{fakeProvider{name: "p"}}, Config{}); err == nil {
+		t.Fatal("expected nil db error")
+	}
+	conn := testDB(t)
+	if _, err := Run(context.Background(), conn, nil, Config{}); err == nil {
+		t.Fatal("expected no provider error")
+	}
+	if _, err := Run(context.Background(), conn, []Provider{fakeProvider{name: "p", candidates: []Candidate{{Provider: "", URL: "https://example.com", Company: "X"}}}}, Config{JSONPath: filepath.Join(t.TempDir(), "x.json")}); err == nil {
+		t.Fatal("expected invalid candidate error")
+	}
+}
+
 func TestRunPreservesAlreadyActiveBoards(t *testing.T) {
 	conn := testDB(t)
 	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
