@@ -9,5 +9,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out/web /usr/local/bin/jobs-web
+COPY --from=build /src/templates /app/templates
+COPY --from=build /src/static /app/static
 EXPOSE 8080
 CMD ["jobs-web"]
