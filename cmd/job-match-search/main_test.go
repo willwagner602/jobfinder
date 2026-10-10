@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func TestMainSuccessPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.EnsureCurrent(t.Context(), conn); err != nil {
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Close(); err != nil {
@@ -95,7 +96,7 @@ func TestRunSuccessAndOutputError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.EnsureCurrent(t.Context(), conn); err != nil {
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Close(); err != nil {
