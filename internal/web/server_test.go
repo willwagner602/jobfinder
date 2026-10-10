@@ -86,6 +86,62 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 	if resume != "resume text" || !strings.Contains(titles, "Staff Engineer") { t.Fatalf("profile not saved: resume=%q titles=%q", resume, titles) }
 }
 
+func TestCodeIsConsumedOnce(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	uid := insertLiveUser(t, s.DB, "code@example.com")
+	if err := s.issueCode(context.Background(), "code@example.com", "login", "127.0.0.1"); err != nil { t.Fatal(err) }
+	code := notifier.codes["code@example.com"]
+	if code == "" { t.Fatal("no code captured") }
+	if !s.verifyCode(context.Background(), uid, code, "login") { t.Fatal("first code use failed") }
+	if s.verifyCode(context.Background(), uid, code, "login") { t.Fatal("replayed code succeeded") }
+	var consumed int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM web_auth_codes WHERE user_id = ? AND consumed_at IS NOT NULL`, uid).Scan(&consumed); err != nil { t.Fatal(err) }
+	if consumed != 1 { t.Fatalf("consumed rows = %d, want 1", consumed) }
+}
+
+func TestCodeConsumeUpdateIsAtomic(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	uid := insertLiveUser(t, s.DB, "atomic@example.com")
+	if err := s.issueCode(context.Background(), "atomic@example.com", "login", "127.0.0.1"); err != nil { t.Fatal(err) }
+	var codeHash string
+	if err := s.DB.QueryRow(`SELECT code_hash FROM web_auth_codes WHERE user_id = ?`, uid).Scan(&codeHash); err != nil { t.Fatal(err) }
+	now := s.Now().Format(time.RFC3339Nano)
+	res, err := s.DB.Exec(`UPDATE web_auth_codes SET consumed_at = ? WHERE auth_code_id = (SELECT auth_code_id FROM web_auth_codes WHERE user_id = ? AND purpose = ? AND code_hash = ? AND consumed_at IS NULL AND expires_at >= ? ORDER BY auth_code_id DESC LIMIT 1) AND consumed_at IS NULL`, now, uid, "login", codeHash, now)
+	if err != nil { t.Fatal(err) }
+	first, err := res.RowsAffected()
+	if err != nil { t.Fatal(err) }
+	res, err = s.DB.Exec(`UPDATE web_auth_codes SET consumed_at = ? WHERE auth_code_id = (SELECT auth_code_id FROM web_auth_codes WHERE user_id = ? AND purpose = ? AND code_hash = ? AND consumed_at IS NULL AND expires_at >= ? ORDER BY auth_code_id DESC LIMIT 1) AND consumed_at IS NULL`, now, uid, "login", codeHash, now)
+	if err != nil { t.Fatal(err) }
+	second, err := res.RowsAffected()
+	if err != nil { t.Fatal(err) }
+	if first != 1 || second != 0 { t.Fatalf("atomic consume rows affected = %d then %d, want 1 then 0", first, second) }
+}
+
+func TestCodeReplayDoesNotRecordSecondUse(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	uid := insertLiveUser(t, s.DB, "history@example.com")
+	if err := s.issueCode(context.Background(), "history@example.com", "login", "127.0.0.1"); err != nil { t.Fatal(err) }
+	code := notifier.codes["history@example.com"]
+	if !s.verifyCode(context.Background(), uid, code, "login") { t.Fatal("first code use failed") }
+	if s.verifyCode(context.Background(), uid, code, "login") { t.Fatal("replayed code succeeded") }
+	var uses int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM user_history WHERE user_id = ? AND event_type = 'auth_code_used'`, uid).Scan(&uses); err != nil { t.Fatal(err) }
+	if uses != 1 { t.Fatalf("use history rows = %d, want 1", uses) }
+}
+
+func TestSMTPNotifierRequiresConfiguration(t *testing.T) {
+	if _, err := NewSMTPNotifier(SMTPConfig{}); err == nil { t.Fatal("missing SMTP config accepted") }
+	n, err := NewSMTPNotifier(SMTPConfig{Addr:"smtp.example.com:587", Username:"user", Password:"pass"})
+	if err != nil { t.Fatal(err) }
+	if n.Config.From != "jobs@willwagner.me" { t.Fatalf("default From = %q", n.Config.From) }
+}
+
 func TestJobPagesAreUserSpecific(t *testing.T) {
 	s := newTestServer(t)
 	ctx := context.Background()
@@ -117,6 +173,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil { t.Fatal(err) }
 	t.Cleanup(func(){ conn.Close() })
 	if err := db.EnsureCurrent(context.Background(), conn); err != nil { t.Fatal(err) }
+	if err := ensureWebStorage(context.Background(), conn); err != nil { t.Fatal(err) }
 	tpl, err := ParseTemplatesFS(fstest.MapFS{
 		"base.html": &fstest.MapFile{Data: []byte(`{{define "header"}}<html><body>{{if .Error}}{{.Error}}{{end}}{{if .Notice}}{{.Notice}}{{end}}{{end}}{{define "footer"}}</body></html>{{end}}`)},
 		"signup.html": &fstest.MapFile{Data: []byte(`{{template "header" .}}<form>{{.CSRF}}</form>{{template "footer" .}}`)},

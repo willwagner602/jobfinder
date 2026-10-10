@@ -15,8 +15,17 @@ func main() {
 	addr := env("WEB_ADDR", ":8080")
 	templateDir := env("TEMPLATE_DIR", "templates")
 	key := sessionKey()
+	notifier, err := web.NewSMTPNotifier(web.SMTPConfig{
+		Addr:     os.Getenv("JOBS_SMTP_ADDR"),
+		Username: os.Getenv("JOBS_SMTP_USERNAME"),
+		Password: os.Getenv("JOBS_SMTP_PASSWORD"),
+		From:     env("JOBS_SMTP_FROM", "jobs@willwagner.me"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	srv, err := web.New(dbPath, templateDir, key, web.LogNotifier{}, web.NoopMatchRunner{})
+	srv, err := web.New(dbPath, templateDir, key, notifier, web.NoopMatchRunner{})
 	if err != nil {
 		log.Fatal(err)
 	}

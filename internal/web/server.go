@@ -114,6 +114,10 @@ func New(databasePath, templateDir string, sessionKey []byte, notifier Notifier,
 		conn.Close()
 		return nil, err
 	}
+	if err := ensureWebStorage(context.Background(), conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
 	tpl, err := ParseTemplates(templateDir)
 	if err != nil {
 		conn.Close()
@@ -351,7 +355,11 @@ func (s *Server) issueCode(ctx context.Context, email, purpose, ip string) error
 	code, err := numericCode()
 	if err != nil { return err }
 	sum := sha256.Sum256([]byte(code))
-	data := map[string]any{"purpose":purpose, "code_hash":hex.EncodeToString(sum[:]), "expires_at":s.Now().UTC().Add(codeTTL).Format(time.RFC3339Nano)}
+	expires := s.Now().UTC().Add(codeTTL)
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO web_auth_codes(user_id, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)`, u.ID, purpose, hex.EncodeToString(sum[:]), expires.Format(time.RFC3339Nano))
+	if err != nil { return err }
+	codeID, _ := res.LastInsertId()
+	data := map[string]any{"purpose":purpose, "code_id":codeID, "expires_at":expires.Format(time.RFC3339Nano)}
 	if err := s.recordHistory(ctx, u.ID, "auth_code_issued", ip, data); err != nil { return err }
 	return s.Notifier.SendCode(ctx, email, code)
 }
@@ -359,28 +367,49 @@ func (s *Server) issueCode(ctx context.Context, email, purpose, ip string) error
 func (s *Server) verifyCode(ctx context.Context, userID int64, code, purpose string) bool {
 	sum := sha256.Sum256([]byte(code))
 	want := hex.EncodeToString(sum[:])
-	rows, err := s.DB.QueryContext(ctx, `SELECT data_json FROM user_history WHERE user_id = ? AND event_type = 'auth_code_issued' ORDER BY created_at DESC, user_history_id DESC LIMIT 10`, userID)
+	now := s.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil { return false }
-	defer rows.Close()
-	for rows.Next() {
-		var raw string
-		if rows.Scan(&raw) != nil { return false }
-		var data map[string]string
-		if json.Unmarshal([]byte(raw), &data) != nil { continue }
-		expires, err := time.Parse(time.RFC3339Nano, data["expires_at"])
-		if err != nil || s.Now().After(expires) || data["purpose"] != purpose { continue }
-		if subtle.ConstantTimeCompare([]byte(data["code_hash"]), []byte(want)) == 1 {
-			s.recordHistory(ctx, userID, "auth_code_used", "", map[string]any{"purpose":purpose})
-			return true
-		}
-	}
-	return false
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE web_auth_codes
+		SET consumed_at = ?
+		WHERE auth_code_id = (
+			SELECT auth_code_id FROM web_auth_codes
+			WHERE user_id = ? AND purpose = ? AND code_hash = ? AND consumed_at IS NULL AND expires_at >= ?
+			ORDER BY auth_code_id DESC
+			LIMIT 1
+		) AND consumed_at IS NULL`, now, userID, purpose, want, now)
+	if err != nil { return false }
+	changed, err := res.RowsAffected()
+	if err != nil || changed != 1 { return false }
+	if _, err := tx.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, data_json) VALUES (?, 'auth_code_used', ?)`, userID, mustJSON(map[string]any{"purpose":purpose})); err != nil { return false }
+	return tx.Commit() == nil
+}
+
+func ensureWebStorage(ctx context.Context, conn *sql.DB) error {
+	_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS web_auth_codes (
+		auth_code_id INTEGER PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+		purpose TEXT NOT NULL,
+		code_hash TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		consumed_at TEXT,
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`)
+	if err != nil { return err }
+	_, err = conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_web_auth_codes_lookup ON web_auth_codes(user_id, purpose, code_hash, consumed_at, expires_at)`)
+	return err
 }
 
 func (s *Server) recordHistory(ctx context.Context, userID int64, eventType, ip string, data map[string]any) error {
 	raw, _ := json.Marshal(data)
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, inbound_ip, data_json) VALUES (?, ?, ?, ?)`, userID, eventType, nullString(ip), string(raw))
 	return err
+}
+
+func mustJSON(data map[string]any) string {
+	raw, _ := json.Marshal(data)
+	return string(raw)
 }
 
 func (s *Server) profile(ctx context.Context, userID int64) *profileData {
