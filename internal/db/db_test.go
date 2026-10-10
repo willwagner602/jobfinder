@@ -100,19 +100,42 @@ func TestListingIdentityVersioningAndImmutability(t *testing.T) {
 	if !changed.Inserted || changed.Version != 2 || changed.ListingID != first.ListingID {
 		t.Fatalf("changed = %+v, want same listing new version 2", changed)
 	}
+	reverted, err := UpsertListingVersion(ctx, conn, ListingVersionInput{
+		CanonicalURL: "https://boards.example/jobs/123",
+		BoardID:      boardID,
+		Title:        "Engineer",
+		Salary:       "$100k",
+		Body:         "<div>Hello world</div>",
+		FoundAt:      found.Add(3 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("reverted upsert: %v", err)
+	}
+	if !reverted.Inserted || reverted.Version != 3 || reverted.ListingID != first.ListingID {
+		t.Fatalf("reverted = %+v, want same listing new version 3", reverted)
+	}
 	var versionRows int
 	if err := conn.QueryRow(`SELECT count(*) FROM job_listing_versions WHERE job_listing_id = ?`, first.ListingID).Scan(&versionRows); err != nil {
 		t.Fatal(err)
 	}
-	if versionRows != 2 {
-		t.Fatalf("version rows = %d, want 2", versionRows)
+	if versionRows != 3 {
+		t.Fatalf("version rows = %d, want 3", versionRows)
 	}
-	var bodyText string
-	if err := conn.QueryRow(`SELECT body_text FROM job_listing_versions WHERE job_listing_id = ? AND version = 1`, first.ListingID).Scan(&bodyText); err != nil {
-		t.Fatal(err)
+	wantBodies := map[int]string{1: "Hello world", 2: "Hello world", 3: "Hello world"}
+	wantFoundAt := map[int]string{
+		1: found.UTC().Format(time.RFC3339Nano),
+		2: found.Add(2 * time.Hour).UTC().Format(time.RFC3339Nano),
+		3: found.Add(3 * time.Hour).UTC().Format(time.RFC3339Nano),
 	}
-	if bodyText != "Hello world" {
-		t.Fatalf("normalized body = %q", bodyText)
+	wantSalary := map[int]string{1: "$100k", 2: "$120k", 3: "$100k"}
+	for version := 1; version <= 3; version++ {
+		var bodyText, foundAt, salary string
+		if err := conn.QueryRow(`SELECT body_text, found_at, salary FROM job_listing_versions WHERE job_listing_id = ? AND version = ?`, first.ListingID, version).Scan(&bodyText, &foundAt, &salary); err != nil {
+			t.Fatal(err)
+		}
+		if bodyText != wantBodies[version] || foundAt != wantFoundAt[version] || salary != wantSalary[version] {
+			t.Fatalf("version %d = body %q found_at %q salary %q, want body %q found_at %q salary %q", version, bodyText, foundAt, salary, wantBodies[version], wantFoundAt[version], wantSalary[version])
+		}
 	}
 }
 

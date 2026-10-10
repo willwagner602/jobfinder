@@ -191,6 +191,21 @@ var migration1 = []string{
 }
 
 var migration2 = []string{
+	`CREATE TABLE job_listing_versions_v2 (
+		job_listing_id INTEGER NOT NULL REFERENCES job_listings(job_listing_id) ON DELETE CASCADE,
+		version INTEGER NOT NULL,
+		found_at TEXT NOT NULL,
+		posted_at TEXT,
+		title TEXT NOT NULL,
+		salary TEXT NOT NULL DEFAULT '',
+		body_text TEXT NOT NULL,
+		content_hash TEXT NOT NULL,
+		PRIMARY KEY (job_listing_id, version)
+	)`,
+	`INSERT INTO job_listing_versions_v2 (job_listing_id, version, found_at, posted_at, title, salary, body_text, content_hash)
+		SELECT job_listing_id, version, found_at, posted_at, title, salary, body_text, content_hash FROM job_listing_versions`,
+	`DROP TABLE job_listing_versions`,
+	`ALTER TABLE job_listing_versions_v2 RENAME TO job_listing_versions`,
 	`CREATE INDEX IF NOT EXISTS idx_job_boards_status ON job_boards(status)`,
 	`CREATE INDEX IF NOT EXISTS idx_job_listing_versions_hash ON job_listing_versions(content_hash)`,
 	`CREATE INDEX IF NOT EXISTS idx_job_matches_user_created ON job_matches(user_id, created_at)`,
@@ -252,12 +267,14 @@ func UpsertListingVersion(ctx context.Context, conn *sql.DB, in ListingVersionIn
 	if err := tx.QueryRowContext(ctx, `SELECT job_listing_id, current_version FROM job_listings WHERE canonical_url = ?`, in.CanonicalURL).Scan(&listingID, &currentVersion); err != nil {
 		return ListingVersionResult{}, err
 	}
-	var existing int
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(version), 0) FROM job_listing_versions WHERE job_listing_id = ? AND content_hash = ?`, listingID, hash).Scan(&existing); err != nil {
-		return ListingVersionResult{}, err
+	var latestHash sql.NullString
+	if currentVersion > 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT content_hash FROM job_listing_versions WHERE job_listing_id = ? AND version = ?`, listingID, currentVersion).Scan(&latestHash); err != nil {
+			return ListingVersionResult{}, err
+		}
 	}
-	if existing > 0 {
-		return ListingVersionResult{ListingID: listingID, Version: existing, Inserted: false}, tx.Commit()
+	if latestHash.Valid && latestHash.String == hash {
+		return ListingVersionResult{ListingID: listingID, Version: currentVersion, Inserted: false}, tx.Commit()
 	}
 	nextVersion := currentVersion + 1
 	if _, err := tx.ExecContext(ctx, `INSERT INTO job_listing_versions (job_listing_id, version, found_at, posted_at, title, salary, body_text, content_hash)
