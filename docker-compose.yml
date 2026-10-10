@@ -29,9 +29,9 @@ services:
     environment:
       JOBS_DB: /data/jobs.sqlite3
       WEB_ADDR: ":8080"
-      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-}
-      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-}
-      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-}
+      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:?set JOBS_SMTP_ADDR}
+      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:?set JOBS_SMTP_USERNAME}
+      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:?set JOBS_SMTP_PASSWORD}
       JOBS_SMTP_FROM: jobs@willwagner.me
     volumes:
       - jobs-data:/data

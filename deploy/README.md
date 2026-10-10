@@ -5,7 +5,7 @@ This deployment runs the web and admin services behind nginx for `jobs.willwagne
 Required runtime configuration:
 
 - `JOBS_ADMIN_TOKEN`: bearer token required for `/admin` pages.
-- `JOBS_SMTP_ADDR`, `JOBS_SMTP_USERNAME`, `JOBS_SMTP_PASSWORD`: optional SMTP settings for the jobs@willwagner.me outbox. If unset, token issuance still works but email sending is unavailable.
+- `JOBS_SMTP_ADDR`, `JOBS_SMTP_USERNAME`, `JOBS_SMTP_PASSWORD`: required by the web service at startup for the jobs@willwagner.me outbox. Set all three before starting the deployment. The admin service can start without SMTP configured, but email delivery for an issued token requires valid SMTP settings.
 - `deploy/certs/`: mount TLS assets here when production certificates are available. The checked-in nginx config is HTTP-only so local and CI validation do not require secrets.
 
 Start locally with:
