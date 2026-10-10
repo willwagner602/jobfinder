@@ -18,9 +18,9 @@ VERSION=$(cat VERSION) JOBS_ADMIN_TOKEN=dev-token docker compose up --build
 | --- | --- |
 | admin | `./cmd/admin ./internal/admin` |
 | web | `./cmd/web ./internal/web` |
-| board-search | `./cmd/board-search ./internal/boardsearch` |
-| job-description-search | `./cmd/job-description-search ./internal/jobdescription` |
-| job-match-search | `./cmd/job-match-search ./internal/jobmatch` |
+| board-search | `./cmd/board-search ./internal/boards` |
+| job-description-search | `./cmd/job-description-search ./internal/jobs` |
+| job-match-search | `./cmd/job-match-search ./internal/matching` |
 
 The script runs `go list` before each service coverage run, so a missing package fails the gate instead of silently skipping coverage while parallel service branches are integrated.
 

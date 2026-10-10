@@ -6,9 +6,9 @@ threshold="${COVERAGE_THRESHOLD:-90}"
 declare -A service_packages=(
   [admin]="./cmd/admin ./internal/admin"
   [web]="./cmd/web ./internal/web"
-  [board-search]="./cmd/board-search ./internal/boardsearch"
-  [job-description-search]="./cmd/job-description-search ./internal/jobdescription"
-  [job-match-search]="./cmd/job-match-search ./internal/jobmatch"
+  [board-search]="./cmd/board-search ./internal/boards"
+  [job-description-search]="./cmd/job-description-search ./internal/jobs"
+  [job-match-search]="./cmd/job-match-search ./internal/matching"
 )
 
 for service in admin web board-search job-description-search job-match-search; do
