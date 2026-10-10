@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,11 +11,16 @@ import (
 	"jobs.willwagner.me/internal/web"
 )
 
-func main() {
+// run starts the web service using environment-driven configuration and keeps
+// serving until ListenAndServe returns.
+func run() error {
 	dbPath := env("JOBS_DB", "jobs.db")
 	addr := env("WEB_ADDR", ":8080")
 	templateDir := env("TEMPLATE_DIR", "templates")
-	key := sessionKey()
+	key, err := sessionKey()
+	if err != nil {
+		return err
+	}
 	notifier, err := web.NewSMTPNotifier(web.SMTPConfig{
 		Addr:     os.Getenv("JOBS_SMTP_ADDR"),
 		Username: os.Getenv("JOBS_SMTP_USERNAME"),
@@ -22,17 +28,21 @@ func main() {
 		From:     env("JOBS_SMTP_FROM", "jobs@willwagner.me"),
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
 	srv, err := web.New(dbPath, templateDir, key, notifier, web.NoopMatchRunner{})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer srv.DB.Close()
-
 	log.Printf("web listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, srv.Routes()))
+	return http.ListenAndServe(addr, srv.Routes())
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func env(name, fallback string) string {
@@ -42,20 +52,20 @@ func env(name, fallback string) string {
 	return fallback
 }
 
-func sessionKey() []byte {
+func sessionKey() ([]byte, error) {
 	if encoded := os.Getenv("SESSION_KEY"); encoded != "" {
 		if raw, err := base64.RawURLEncoding.DecodeString(encoded); err == nil && len(raw) >= 32 {
-			return raw
+			return raw, nil
 		}
 		if len(encoded) >= 32 {
-			return []byte(encoded)
+			return []byte(encoded), nil
 		}
-		log.Fatal("SESSION_KEY must be at least 32 bytes or raw-url-base64 encoded 32 bytes")
+		return nil, fmt.Errorf("SESSION_KEY must be at least 32 bytes or raw-url-base64 encoded 32 bytes")
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	log.Print("SESSION_KEY is not set; generated an ephemeral key, so sessions will reset on restart")
-	return key
+	return key, nil
 }

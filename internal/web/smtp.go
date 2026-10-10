@@ -15,6 +15,12 @@ type SMTPConfig struct {
 	Username string
 	Password string
 	From     string
+	// ImplicitTLS forces implicit-TLS delivery (like port 465) even when the
+	// address does not end in ":465"; useful for in-process test servers.
+	ImplicitTLS bool
+	// TLSClientConfig optionally overrides the TLS dial settings used for
+	// implicit-TLS (port 465) delivery; production defaults remain safe.
+	TLSClientConfig *tls.Config
 }
 
 type SMTPNotifier struct {
@@ -70,14 +76,18 @@ func (n *SMTPNotifier) SendCode(ctx context.Context, email, code string) error {
 		"This code expires in 15 minutes. If you did not request it, ignore this message.",
 	}, "\r\n")
 	auth := smtp.PlainAuth("", n.Config.Username, n.Config.Password, host)
-	if strings.HasSuffix(n.Config.Addr, ":465") {
+	if n.Config.ImplicitTLS || strings.HasSuffix(n.Config.Addr, ":465") {
 		return n.sendTLS(host, auth, to, []byte(msg))
 	}
 	return smtp.SendMail(n.Config.Addr, auth, n.Config.From, []string{to}, []byte(msg))
 }
 
 func (n *SMTPNotifier) sendTLS(host string, auth smtp.Auth, to string, msg []byte) error {
-	conn, err := tls.Dial("tcp", n.Config.Addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+	tlsCfg := n.Config.TLSClientConfig
+	if tlsCfg == nil {
+		tlsCfg = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	}
+	conn, err := tls.Dial("tcp", n.Config.Addr, tlsCfg)
 	if err != nil {
 		return err
 	}

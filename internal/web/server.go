@@ -593,6 +593,9 @@ func verifyPassword(password, encoded string) bool {
 	if err != nil {
 		return false
 	}
+	if len(want) != pbkdf2KeyLen {
+		return false
+	}
 	got := pbkdf2SHA256([]byte(password), salt, iter, len(want))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
@@ -653,7 +656,7 @@ func nullString(v string) any {
 
 func jsonList(text string) string {
 	items := strings.Split(text, "\n")
-	var out []string
+	out := make([]string, 0, len(items))
 	for _, item := range items {
 		if s := strings.TrimSpace(item); s != "" {
 			out = append(out, s)
