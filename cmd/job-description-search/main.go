@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"jobs.willwagner.me/internal/db"
@@ -21,23 +20,28 @@ func main() {
 	sinceFlag := flag.String("since", time.Now().UTC().AddDate(0, 0, -8).Format("2006-01-02"), "oldest posting date to request when providers support server-side filtering")
 	healthAddr := flag.String("health-addr", "", "optional address for liveness endpoint /healthz while the run is active")
 	flag.Parse()
-
-	ctx := context.Background()
-	since, err := time.Parse("2006-01-02", *sinceFlag)
-	if err != nil {
-		log.Fatalf("parse -since: %v", err)
+	if err := run(*dbPath, *sinceFlag, *healthAddr); err != nil {
+		log.Fatal(err)
 	}
-	conn, err := db.Open(*dbPath)
+}
+
+func run(dbPath, sinceFlag, healthAddr string) error {
+	ctx := context.Background()
+	since, err := time.Parse("2006-01-02", sinceFlag)
 	if err != nil {
-		log.Fatalf("open database: %v", err)
+		return fmt.Errorf("parse -since: %w", err)
+	}
+	conn, err := db.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer conn.Close()
 	if err := db.EnsureCurrent(ctx, conn); err != nil {
-		log.Fatalf("ensure database schema: %v", err)
+		return fmt.Errorf("ensure database schema: %w", err)
 	}
 	var server *http.Server
-	if *healthAddr != "" {
-		server = startHealth(*healthAddr)
+	if healthAddr != "" {
+		server = startHealth(healthAddr)
 		defer server.Shutdown(context.Background())
 	}
 	started := time.Now().UTC()
@@ -50,9 +54,10 @@ func main() {
 		for _, msg := range result.Errors {
 			log.Printf("error: %s", msg)
 		}
-		os.Exit(1)
+		return runErr
 	}
 	fmt.Printf("job-description-search complete: seen=%d inserted=%d updated=%d\n", result.Seen, result.Inserted, result.Updated)
+	return nil
 }
 
 func startHealth(addr string) *http.Server {

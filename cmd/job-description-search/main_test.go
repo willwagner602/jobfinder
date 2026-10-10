@@ -4,14 +4,62 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"jobs.willwagner.me/internal/db"
 	"jobs.willwagner.me/internal/jobs"
 )
+
+func TestMainInvokesRun(t *testing.T) {
+	old := flag.CommandLine
+	defer func() { flag.CommandLine = old }()
+	flag.CommandLine = flag.NewFlagSet("job-description-search-test", flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"job-description-search", "-db", filepath.Join(t.TempDir(), "main.sqlite"), "-since", "2025-01-01"}
+	main()
+}
+
+func TestRunValidatesInputAndRuns(t *testing.T) {
+	if err := run("unused.sqlite", "not-a-date", ""); err == nil {
+		t.Fatal("run should reject an invalid date")
+	}
+	if err := run(t.TempDir(), "2025-01-01", ""); err == nil {
+		t.Fatal("run should reject a directory as a database file")
+	}
+	path := t.TempDir() + "/jobs.sqlite"
+	if err := run(path, "2025-01-01", ""); err != nil {
+		t.Fatalf("run with empty database: %v", err)
+	}
+}
+
+func TestRunRecordsJobErrors(t *testing.T) {
+	path := t.TempDir() + "/jobs.sqlite"
+	conn, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO job_boards(board_url, company, ats_type, status) VALUES ('https://example.test', 'Unknown', 'bogus', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(path, "2025-01-01", ""); err == nil {
+		t.Fatal("run should return provider errors")
+	}
+}
 
 func TestStartHealth(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -35,6 +83,18 @@ func TestStartHealth(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("health endpoint did not start")
+}
+
+func TestStartHealthLogsListenFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	defer listener.Close()
+	server := startHealth(addr)
+	defer server.Close()
+	time.Sleep(20 * time.Millisecond)
 }
 
 func TestRecordHistoryStatusesAndJSON(t *testing.T) {
