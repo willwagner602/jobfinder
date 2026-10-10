@@ -1,0 +1,10 @@
+{{template "header" .}}
+<h2>Job matches</h2>
+{{if .Jobs}}
+<ul class="jobs">
+{{range .Jobs}}
+  <li><a href="/jobs/{{.MatchID}}">{{.Title}}</a> at {{.Company}} — {{.Decision}}{{if .Rating.Valid}} ({{.Rating.Int64}}/5){{end}}</li>
+{{end}}
+</ul>
+{{else}}<p>No matches yet. Save your profile to request a prior-week match run.</p>{{end}}
+{{template "footer" .}}

@@ -1,0 +1,11 @@
+{{template "header" .}}
+<h2>Log in</h2>
+<form method="post" action="/login">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Email <input type="email" name="email" required autocomplete="email"></label>
+  <label>Password <input type="password" name="password" autocomplete="current-password"></label>
+  <label>One-time code <input name="code" inputmode="numeric"></label>
+  <button name="login" value="1">Log in</button>
+  <button name="send_code" value="1">Email me a code</button>
+</form>
+{{template "footer" .}}

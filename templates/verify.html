@@ -1,0 +1,9 @@
+{{template "header" .}}
+<h2>Verify email</h2>
+<form method="post" action="/verify">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Email <input type="email" name="email" value="{{.Notice}}" required autocomplete="email"></label>
+  <label>One-time code <input name="code" inputmode="numeric" pattern="[0-9]{6}" required></label>
+  <button>Verify and continue</button>
+</form>
+{{template "footer" .}}
