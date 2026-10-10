@@ -46,7 +46,7 @@ func TestEnsureCurrentUpgradesPreviousSchema(t *testing.T) {
 		id     int64
 		status schema.BoardStatus
 	}{
-		"https://example.com/jobs":     {id: 1, status: schema.BoardStatusActive},
+		"https://example.com/jobs":         {id: 1, status: schema.BoardStatusActive},
 		"https://unsupported.example/jobs": {id: 2, status: schema.BoardStatusUnsupported},
 	} {
 		var boardID int64
