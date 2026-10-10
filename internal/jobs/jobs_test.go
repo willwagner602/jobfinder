@@ -169,6 +169,9 @@ func TestHackerNewsFetchFailureDoesNotNegativeCache(t *testing.T) {
 	if err == nil {
 		t.Fatal("first run succeeded, want transient failure after retries")
 	}
+	if first.Inserted != 0 {
+		t.Fatalf("first run inserted %d, want no inserts on transient failure before retry", first.Inserted)
+	}
 	assertHNCacheRows(t, conn, 0, 0)
 	second, err := Run(context.Background(), conn, server.Client(), time.Time{})
 	if err != nil {

@@ -283,7 +283,9 @@ func (LeverProvider) Fetch(ctx context.Context, client *http.Client, board Board
 		HostedURL   string `json:"hostedUrl"`
 		Description string `json:"description"`
 		CreatedAt   int64  `json:"createdAt"`
-		Categories  struct{ Commitment string `json:"commitment"` } `json:"categories"`
+		Categories  struct {
+			Commitment string `json:"commitment"`
+		} `json:"categories"`
 	}
 	if err := getJSON(ctx, client, boardEndpoint(board.URL, "/postings?mode=json"), &payload); err != nil {
 		return nil, err
