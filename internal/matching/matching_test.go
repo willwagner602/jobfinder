@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,6 +117,42 @@ func TestExhaustedClassifierFailurePersistsFailureAndPartialHistory(t *testing.T
 	assertHistory(t, conn, schema.ProcessStatusPartial, 1)
 }
 
+func TestEngineValidationAndRetryAbortBranches(t *testing.T) {
+	if _, err := (Engine{}).Run(context.Background()); err == nil {
+		t.Fatal("nil DB accepted")
+	}
+	conn := testDB(t)
+	if _, err := (Engine{DB: conn}).Run(context.Background()); err == nil {
+		t.Fatal("missing default classifier accepted")
+	}
+	seedListing(t, conn, "Engineer", "Example", "body")
+	seedUser(t, conn, "bad@example.com", "missing", `[]`, `[]`)
+	if _, err := (Engine{DB: conn, Classifiers: map[string]Classifier{"jev": &scriptedClassifier{}}}).Run(context.Background()); err == nil {
+		t.Fatal("unregistered user matcher accepted")
+	}
+
+	conn = testDB(t)
+	seedListing(t, conn, "Engineer", "Example", "body")
+	seedUser(t, conn, "retry@example.com", "", `[]`, `[]`)
+	classifier := &scriptedClassifier{results: []Result{{Decision: schema.JobMatchDecisionMatch, Rating: 0}}}
+	summary, err := (Engine{DB: conn, Classifiers: map[string]Classifier{"jev": classifier}, Options: testOptions()}).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run invalid classifier result: %v", err)
+	}
+	if summary.Failures != 1 {
+		t.Fatalf("summary=%+v want one persisted failure", summary)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	opts := testOptions()
+	opts.Sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	_, err = (Engine{DB: testDB(t), Classifiers: map[string]Classifier{"jev": &scriptedClassifier{errs: []error{errors.New("temporary")}}}, Options: opts}).Run(ctx)
+	if err == nil {
+		t.Fatal("cancelled retry accepted")
+	}
+}
+
 func testOptions() Options {
 	fixed := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	return Options{DefaultMatcher: "jev", MaxAttempts: 3, InitialBackoff: 10 * time.Millisecond, Sleep: func(context.Context, time.Duration) error { return nil }, Now: func() time.Time { return fixed }}
@@ -189,6 +226,74 @@ func assertHistory(t *testing.T, conn *sql.DB, status schema.ProcessStatus, item
 	}
 	if gotStatus != string(status) || gotItems != items {
 		t.Fatalf("history status=%q items=%d", gotStatus, gotItems)
+	}
+}
+
+func TestOptionsDefaults(t *testing.T) {
+	o := (Engine{}).options()
+	if o.DefaultMatcher != "jev" || o.MaxAttempts != 3 || o.InitialBackoff != time.Second || o.Sleep == nil || o.Now == nil {
+		t.Fatalf("options defaults = %+v", o)
+	}
+	if err := o.Sleep(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := o.Sleep(ctx, time.Hour); err == nil {
+		t.Fatal("cancelled sleep succeeded")
+	}
+}
+
+func TestValidateResultBranches(t *testing.T) {
+	for _, result := range []Result{{Decision: schema.JobMatchDecisionFailure}, {Decision: "bad"}, {Decision: schema.JobMatchDecisionMatch, Rating: 6}} {
+		if err := validateResult(result); err == nil {
+			t.Errorf("validateResult(%+v) succeeded", result)
+		}
+	}
+	if err := validateResult(Result{Decision: schema.JobMatchDecisionNoMatch, Rating: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResult(Result{Decision: schema.JobMatchDecisionMatch, Rating: 1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoverageHelpersAndFilters(t *testing.T) {
+	if got := decodeStringList(`not json`); got != nil {
+		t.Fatalf("invalid list = %v", got)
+	}
+	if got := decodeStringList(`["x"]`); len(got) != 1 || got[0] != "x" {
+		t.Fatalf("decoded list = %v", got)
+	}
+	if string(mustJSON(make(chan int))) != `{}` {
+		t.Fatal("unmarshalable value should produce empty object")
+	}
+	if string(mustJSON(map[string]int{"x": 1})) != `{"x":1}` {
+		t.Fatal("marshalable value lost")
+	}
+	if _, err := (llmDecision{Decision: "match", Rating: 0}).result("m"); err == nil {
+		t.Fatal("invalid match rating accepted")
+	}
+	if _, err := (llmDecision{Decision: "other"}).result("m"); err == nil {
+		t.Fatal("invalid decision accepted")
+	}
+	if _, err := (llmDecision{Decision: "no_match", Rating: 4}).result("m"); err != nil {
+		t.Fatal(err)
+	}
+	if got := truncateForError(" \nshort \t"); got != "short" {
+		t.Fatalf("trimmed error = %q", got)
+	}
+	if got := truncateForError(strings.Repeat("x", 201)); len(got) != 203 || !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncation = %q", got)
+	}
+	if got, _ := preclassifiedNoMatch(userConfig{BlockedCompanies: []string{" blocked co "}}, listingVersion{Company: "Blocked Co"}); got.Decision != schema.JobMatchDecisionNoMatch {
+		t.Fatal("blocked company not filtered")
+	}
+	if got, _ := preclassifiedNoMatch(userConfig{DesiredTitles: []string{" Engineer "}}, listingVersion{Title: "Senior Engineer"}); got.Decision != "" {
+		t.Fatal("matching desired title filtered")
+	}
+	if got, _ := preclassifiedNoMatch(userConfig{DesiredTitles: []string{"Engineer"}}, listingVersion{Title: "Designer"}); got.Decision != schema.JobMatchDecisionNoMatch {
+		t.Fatal("nonmatching title accepted")
 	}
 }
 
