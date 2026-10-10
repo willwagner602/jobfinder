@@ -25,7 +25,7 @@ const (
 )
 
 // Candidate is the provider-neutral import boundary for discovered boards.
-// Candidates are persisted as active or unsupported boards, but are not used to
+// Candidates are persisted as discovered or unsupported boards, but are not used to
 // activate downstream scraping work by this service.
 type Candidate struct {
 	Provider        string            `json:"provider"`
@@ -171,7 +171,7 @@ func upsertCandidates(ctx context.Context, conn *sql.DB, candidates []Candidate,
 			continue
 		}
 		if err != nil { return res, err }
-		_, err = tx.ExecContext(ctx, `UPDATE job_boards SET company = ?, ats_type = ?, status = ?, metadata_json = ?, updated_at = ? WHERE board_id = ?`, board.Company, nullString(board.ATSType), board.Status, string(metadata), board.UpdatedAt.Format(time.RFC3339Nano), existing)
+		_, err = tx.ExecContext(ctx, `UPDATE job_boards SET company = ?, ats_type = ?, status = CASE WHEN status = 'active' THEN status ELSE ? END, metadata_json = ?, updated_at = ? WHERE board_id = ?`, board.Company, nullString(board.ATSType), board.Status, string(metadata), board.UpdatedAt.Format(time.RFC3339Nano), existing)
 		if err != nil { return res, err }
 		res.updated++
 	}
@@ -189,7 +189,7 @@ func (c Candidate) Board(now func() time.Time) (Board, error) {
 	discovered := c.DiscoveredAt.UTC()
 	if discovered.IsZero() { discovered = now() }
 	status := schema.BoardStatusUnsupported
-	if c.Supported { status = schema.BoardStatusActive }
+	if c.Supported { status = schema.BoardStatusDiscovered }
 	metadata := map[string]string{"provider": provider}
 	if c.Identifier != "" { metadata["identifier"] = c.Identifier }
 	if c.Provenance != "" { metadata["provenance"] = c.Provenance }

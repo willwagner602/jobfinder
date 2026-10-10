@@ -26,7 +26,7 @@ func testDB(t *testing.T) *sql.DB {
 	return conn
 }
 
-func TestRunPersistsUnsupportedBoardsAndSynchronizesJSON(t *testing.T) {
+func TestRunPersistsDiscoveredAndUnsupportedBoardsAndSynchronizesJSON(t *testing.T) {
 	conn := testDB(t)
 	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	jsonPath := filepath.Join(t.TempDir(), "job-boards.json")
@@ -38,6 +38,9 @@ func TestRunPersistsUnsupportedBoardsAndSynchronizesJSON(t *testing.T) {
 	if err != nil { t.Fatalf("Run: %v", err) }
 	if res.Inserted != 2 || res.JSONBoards != 2 { t.Fatalf("result = %+v, want 2 inserted and 2 JSON boards", res) }
 
+	var discovered int
+	if err := conn.QueryRow(`SELECT count(*) FROM job_boards WHERE status = ? AND board_url = ?`, schema.BoardStatusDiscovered, "https://boards.greenhouse.io/acme/jobs/1").Scan(&discovered); err != nil { t.Fatal(err) }
+	if discovered != 1 { t.Fatalf("discovered boards = %d, want 1", discovered) }
 	var unsupported int
 	if err := conn.QueryRow(`SELECT count(*) FROM job_boards WHERE status = ? AND board_url = ?`, schema.BoardStatusUnsupported, "https://example.com/careers").Scan(&unsupported); err != nil { t.Fatal(err) }
 	if unsupported != 1 { t.Fatalf("unsupported boards = %d, want 1", unsupported) }
@@ -49,6 +52,18 @@ func TestRunPersistsUnsupportedBoardsAndSynchronizesJSON(t *testing.T) {
 	var historyStatus string
 	if err := conn.QueryRow(`SELECT status FROM job_history WHERE service = ?`, ServiceName).Scan(&historyStatus); err != nil { t.Fatal(err) }
 	if historyStatus != string(schema.ProcessStatusSuccess) { t.Fatalf("history status = %s", historyStatus) }
+}
+
+func TestRunPreservesAlreadyActiveBoards(t *testing.T) {
+	conn := testDB(t)
+	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := conn.Exec(`INSERT INTO job_boards (board_url, company, ats_type, status, metadata_json, discovered_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)`, "https://jobs.lever.co/acme/1", "Acme", "lever", schema.BoardStatusActive, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil { t.Fatal(err) }
+	providers := []Provider{fakeProvider{name: "fake", candidates: []Candidate{{Provider: "fake", Identifier: "known", URL: "https://jobs.lever.co/acme/1", Company: "Acme", ATSType: "lever", Supported: true, DiscoveredAt: now}}}}
+	_, err := Run(context.Background(), conn, providers, Config{JSONPath: filepath.Join(t.TempDir(), "boards.json"), Now: func() time.Time { return now }})
+	if err != nil { t.Fatalf("Run: %v", err) }
+	var status string
+	if err := conn.QueryRow(`SELECT status FROM job_boards WHERE board_url = ?`, "https://jobs.lever.co/acme/1").Scan(&status); err != nil { t.Fatal(err) }
+	if status != string(schema.BoardStatusActive) { t.Fatalf("status = %s, want active", status) }
 }
 
 func TestCandidateValidation(t *testing.T) {
