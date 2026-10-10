@@ -73,7 +73,7 @@ func TestClassifierRetryBackoffThenPersistsMatch(t *testing.T) {
 	seedListing(t, conn, "Backend Engineer", "Example Co", "Go services")
 	seedUser(t, conn, "person@example.com", "", `[]`, `[]`)
 	classifier := &scriptedClassifier{
-		errs: []error{errors.New("temporary"), nil},
+		errs:    []error{errors.New("temporary"), nil},
 		results: []Result{{}, {Decision: schema.JobMatchDecisionMatch, Rating: 4, Data: json.RawMessage(`{"ok":true}`)}},
 	}
 	var sleeps []time.Duration
@@ -124,28 +124,40 @@ func testOptions() Options {
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 	conn, err := db.Open(":memory:")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { conn.Close() })
-	if err := db.EnsureCurrent(context.Background(), conn); err != nil { t.Fatal(err) }
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
 	return conn
 }
 
 func seedUser(t *testing.T, conn *sql.DB, email, matcher, desired, blocked string) int64 {
 	t.Helper()
 	res, err := conn.Exec(`INSERT INTO users(email, status, email_confirmed_at) VALUES (?, ?, ?)`, email, schema.UserStatusLive, "2025-01-01T00:00:00Z")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	id, _ := res.LastInsertId()
-	if _, err := conn.Exec(`INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, blocked_companies_json, matcher_name) VALUES (?, ?, ?, ?, ?, ?)`, id, "resume", "experience", desired, blocked, nullIfEmpty(matcher)); err != nil { t.Fatal(err) }
+	if _, err := conn.Exec(`INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, blocked_companies_json, matcher_name) VALUES (?, ?, ?, ?, ?, ?)`, id, "resume", "experience", desired, blocked, nullIfEmpty(matcher)); err != nil {
+		t.Fatal(err)
+	}
 	return id
 }
 
 func seedListing(t *testing.T, conn *sql.DB, title, company, body string) int64 {
 	t.Helper()
 	res, err := conn.Exec(`INSERT INTO job_boards(board_url, company, ats_type, status) VALUES (?, ?, ?, ?)`, "https://"+company+"/jobs", company, "lever", schema.BoardStatusActive)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	boardID, _ := res.LastInsertId()
-	version, err := db.UpsertListingVersion(context.Background(), conn, db.ListingVersionInput{CanonicalURL: "https://"+company+"/jobs/1", BoardID: boardID, Title: title, Body: body})
-	if err != nil { t.Fatal(err) }
+	version, err := db.UpsertListingVersion(context.Background(), conn, db.ListingVersionInput{CanonicalURL: "https://" + company + "/jobs/1", BoardID: boardID, Title: title, Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return version.ListingID
 }
 
@@ -153,10 +165,16 @@ func assertMatch(t *testing.T, conn *sql.DB, userID, listingID int64, matcher st
 	t.Helper()
 	var gotDecision string
 	var gotRating sql.NullInt64
-	if err := conn.QueryRow(`SELECT decision, rating FROM job_matches WHERE user_id = ? AND job_listing_id = ? AND matcher_name = ?`, userID, listingID, matcher).Scan(&gotDecision, &gotRating); err != nil { t.Fatal(err) }
-	if gotDecision != string(decision) { t.Fatalf("decision = %q, want %q", gotDecision, decision) }
+	if err := conn.QueryRow(`SELECT decision, rating FROM job_matches WHERE user_id = ? AND job_listing_id = ? AND matcher_name = ?`, userID, listingID, matcher).Scan(&gotDecision, &gotRating); err != nil {
+		t.Fatal(err)
+	}
+	if gotDecision != string(decision) {
+		t.Fatalf("decision = %q, want %q", gotDecision, decision)
+	}
 	if rating == 0 {
-		if gotRating.Valid { t.Fatalf("rating = %d, want null", gotRating.Int64) }
+		if gotRating.Valid {
+			t.Fatalf("rating = %d, want null", gotRating.Int64)
+		}
 	} else if !gotRating.Valid || int(gotRating.Int64) != rating {
 		t.Fatalf("rating = %v, want %d", gotRating, rating)
 	}
@@ -166,11 +184,17 @@ func assertHistory(t *testing.T, conn *sql.DB, status schema.ProcessStatus, item
 	t.Helper()
 	var gotStatus string
 	var gotItems int
-	if err := conn.QueryRow(`SELECT status, items_processed FROM job_history WHERE service = ? ORDER BY job_history_id DESC LIMIT 1`, ServiceName).Scan(&gotStatus, &gotItems); err != nil { t.Fatal(err) }
-	if gotStatus != string(status) || gotItems != items { t.Fatalf("history status=%q items=%d", gotStatus, gotItems) }
+	if err := conn.QueryRow(`SELECT status, items_processed FROM job_history WHERE service = ? ORDER BY job_history_id DESC LIMIT 1`, ServiceName).Scan(&gotStatus, &gotItems); err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus != string(status) || gotItems != items {
+		t.Fatalf("history status=%q items=%d", gotStatus, gotItems)
+	}
 }
 
 func nullIfEmpty(s string) any {
-	if s == "" { return nil }
+	if s == "" {
+		return nil
+	}
 	return s
 }
