@@ -1,6 +1,6 @@
 # Container deployment
 
-This deployment runs the admin service behind nginx for `jobs.willwagner.me`.
+This deployment runs the web and admin services behind nginx for `jobs.willwagner.me`. Public job, signup, and login routes go to the web service; `/admin` and `/healthz` go to admin. Both services use the shared SQLite database volume.
 
 Required runtime configuration:
 

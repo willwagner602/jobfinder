@@ -21,10 +21,27 @@ services:
       retries: 3
     restart: unless-stopped
 
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Containerfile
+    image: ghcr.io/willwagner/jobs.willwagner.me-web:${VERSION:-local}
+    environment:
+      JOBS_DB: /data/jobs.sqlite3
+      WEB_ADDR: ":8080"
+      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-}
+      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-}
+      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-}
+      JOBS_SMTP_FROM: jobs@willwagner.me
+    volumes:
+      - jobs-data:/data
+    restart: unless-stopped
+
   nginx:
     image: nginx:1.27-alpine
     depends_on:
       - admin
+      - web
     ports:
       - "80:80"
       - "443:443"
