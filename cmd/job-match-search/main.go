@@ -4,33 +4,47 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
+	"strings"
+	"time"
 
 	"jobs.willwagner.me/internal/db"
 	"jobs.willwagner.me/internal/matching"
 )
 
 func main() {
-	var dbPath, defaultMatcher string
-	flag.StringVar(&dbPath, "db", os.Getenv("JOB_DB_PATH"), "path to sqlite database")
-	flag.StringVar(&defaultMatcher, "matcher", "jev", "global default matcher")
-	flag.Parse()
-	if dbPath == "" {
-		log.Fatal("database path required via -db or JOB_DB_PATH")
+	if err := run(os.Args[1:], os.Getenv, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	classifiers, err := classifiersFromEnv()
+}
+
+func run(args []string, getenv func(string) string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("job-match-search", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dbPath := getenv("JOB_DB_PATH")
+	defaultMatcher := "jev"
+	flags.StringVar(&dbPath, "db", dbPath, "path to sqlite database")
+	flags.StringVar(&defaultMatcher, "matcher", defaultMatcher, "global default matcher")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" {
+		return fmt.Errorf("database path required via -db or JOB_DB_PATH")
+	}
+	classifiers, err := classifiersFromEnv(getenv)
 	if err != nil {
-		log.Fatalf("configure classifiers: %v", err)
+		return fmt.Errorf("configure classifiers: %w", err)
 	}
 	conn, err := db.Open(dbPath)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer conn.Close()
 	ctx := context.Background()
 	if err := db.EnsureCurrent(ctx, conn); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("prepare database: %w", err)
 	}
 	engine := matching.Engine{
 		DB:          conn,
@@ -38,14 +52,28 @@ func main() {
 		Options:     matching.Options{DefaultMatcher: defaultMatcher},
 	}
 	summary, err := engine.Run(ctx)
-	fmt.Printf("processed=%d matched=%d no_match=%d failures=%d\n", summary.Processed, summary.Matched, summary.NoMatch, summary.Failures)
+	_, writeErr := fmt.Fprintf(stdout, "processed=%d matched=%d no_match=%d failures=%d\n", summary.Processed, summary.Matched, summary.NoMatch, summary.Failures)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return writeErr
 }
 
-func classifiersFromEnv() (map[string]matching.Classifier, error) {
-	jev, err := matching.NewLLMClassifierFromEnv()
+func classifiersFromEnv(getenv func(string) string) (map[string]matching.Classifier, error) {
+	timeout := 30 * time.Second
+	if raw := strings.TrimSpace(getenv("JOB_MATCH_LLM_TIMEOUT")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, fmt.Errorf("invalid JOB_MATCH_LLM_TIMEOUT %q", raw)
+		}
+		timeout = parsed
+	}
+	jev, err := matching.NewLLMClassifier(matching.LLMConfig{
+		Endpoint: getenv("JOB_MATCH_LLM_URL"),
+		Model:    getenv("JOB_MATCH_LLM_MODEL"),
+		APIKey:   getenv("JOB_MATCH_LLM_API_KEY"),
+		Timeout:  timeout,
+	})
 	if err != nil {
 		return nil, err
 	}
