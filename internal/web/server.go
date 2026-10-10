@@ -64,11 +64,11 @@ type Server struct {
 }
 
 type user struct {
-	ID              int64
-	Email           string
-	PasswordHash    sql.NullString
-	EmailConfirmed  sql.NullString
-	Status          string
+	ID             int64
+	Email          string
+	PasswordHash   sql.NullString
+	EmailConfirmed sql.NullString
+	Status         string
 }
 
 type pageData struct {
@@ -156,7 +156,7 @@ func runnerOrDefault(r MatchRunner) MatchRunner {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	mux.HandleFunc("GET /signup", s.signupForm)
 	mux.HandleFunc("POST /signup", s.signupPost)
 	mux.HandleFunc("GET /verify", s.verifyForm)
@@ -187,7 +187,10 @@ func (s *Server) signupForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) { http.Error(w, "bad csrf token", http.StatusForbidden); return }
+	if !s.validCSRF(r) {
+		http.Error(w, "bad csrf token", http.StatusForbidden)
+		return
+	}
 	email := normalizeEmail(r.FormValue("email"))
 	password := r.FormValue("password")
 	if email == "" {
@@ -197,12 +200,21 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 	var hash sql.NullString
 	if password != "" {
 		encoded, err := hashPassword(password)
-		if err != nil { http.Error(w, "password setup failed", http.StatusInternalServerError); return }
+		if err != nil {
+			http.Error(w, "password setup failed", http.StatusInternalServerError)
+			return
+		}
 		hash = sql.NullString{String: encoded, Valid: true}
 	}
 	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
-	if err != nil { http.Error(w, "signup failed", http.StatusInternalServerError); return }
-	if err := s.issueCode(r.Context(), email, "signup", clientIP(r)); err != nil { http.Error(w, "verification code failed", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "signup failed", http.StatusInternalServerError)
+		return
+	}
+	if err := s.issueCode(r.Context(), email, "signup", clientIP(r)); err != nil {
+		http.Error(w, "verification code failed", http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/verify?email="+urlQuery(email), http.StatusSeeOther)
 }
 
@@ -211,7 +223,10 @@ func (s *Server) verifyForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) verifyPost(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) { http.Error(w, "bad csrf token", http.StatusForbidden); return }
+	if !s.validCSRF(r) {
+		http.Error(w, "bad csrf token", http.StatusForbidden)
+		return
+	}
 	email := normalizeEmail(r.FormValue("email"))
 	code := strings.TrimSpace(r.FormValue("code"))
 	u, err := s.findUserByEmail(r.Context(), email)
@@ -220,8 +235,11 @@ func (s *Server) verifyPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = s.DB.ExecContext(r.Context(), `UPDATE users SET email_confirmed_at = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE user_id = ?`, s.Now().UTC().Format(time.RFC3339Nano), schema.UserStatusLive, u.ID)
-	if err != nil { http.Error(w, "verification failed", http.StatusInternalServerError); return }
-	s.recordHistory(r.Context(), u.ID, "email_confirmed", clientIP(r), map[string]any{"purpose":"signup"})
+	if err != nil {
+		http.Error(w, "verification failed", http.StatusInternalServerError)
+		return
+	}
+	s.recordHistory(r.Context(), u.ID, "email_confirmed", clientIP(r), map[string]any{"purpose": "signup"})
 	s.setSession(w, u.ID)
 	http.Redirect(w, r, "/onboarding", http.StatusSeeOther)
 }
@@ -231,7 +249,10 @@ func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) { http.Error(w, "bad csrf token", http.StatusForbidden); return }
+	if !s.validCSRF(r) {
+		http.Error(w, "bad csrf token", http.StatusForbidden)
+		return
+	}
 	email := normalizeEmail(r.FormValue("email"))
 	u, err := s.findUserByEmail(r.Context(), email)
 	if err != nil || u.Status != string(schema.UserStatusLive) || !u.EmailConfirmed.Valid {
@@ -239,7 +260,10 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.FormValue("send_code") != "" {
-		if err := s.issueCode(r.Context(), email, "login", clientIP(r)); err != nil { http.Error(w, "code failed", http.StatusInternalServerError); return }
+		if err := s.issueCode(r.Context(), email, "login", clientIP(r)); err != nil {
+			http.Error(w, "code failed", http.StatusInternalServerError)
+			return
+		}
 		s.render(w, r, "login.html", pageData{Title: "Log in", Notice: "Code sent", CSRF: s.csrf(w, r)})
 		return
 	}
@@ -252,13 +276,16 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "login.html", pageData{Title: "Log in", Error: "Invalid email or password", CSRF: s.csrf(w, r)})
 		return
 	}
-	s.recordHistory(r.Context(), u.ID, "login", clientIP(r), map[string]any{"method":"web"})
+	s.recordHistory(r.Context(), u.ID, "login", clientIP(r), map[string]any{"method": "web"})
 	s.setSession(w, u.ID)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
-	if !s.validCSRF(r) { http.Error(w, "bad csrf token", http.StatusForbidden); return }
+func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request, u *user) {
+	if !s.validCSRF(r) {
+		http.Error(w, "bad csrf token", http.StatusForbidden)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -273,7 +300,10 @@ func (s *Server) onboardingForm(w http.ResponseWriter, r *http.Request, u *user)
 }
 
 func (s *Server) onboardingPost(w http.ResponseWriter, r *http.Request, u *user) {
-	if !s.validCSRF(r) { http.Error(w, "bad csrf token", http.StatusForbidden); return }
+	if !s.validCSRF(r) {
+		http.Error(w, "bad csrf token", http.StatusForbidden)
+		return
+	}
 	resume := strings.TrimSpace(r.FormValue("resume_text"))
 	experience := strings.TrimSpace(r.FormValue("experience_text"))
 	if resume == "" && experience == "" {
@@ -284,28 +314,46 @@ func (s *Server) onboardingPost(w http.ResponseWriter, r *http.Request, u *user)
 	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, search_preferences_json, blocked_companies_json, matcher_name)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET resume_text=excluded.resume_text, experience_text=excluded.experience_text, desired_titles_json=excluded.desired_titles_json, search_preferences_json=excluded.search_preferences_json, blocked_companies_json=excluded.blocked_companies_json, matcher_name=excluded.matcher_name, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`, u.ID, resume, experience, profile.DesiredTitles, profile.SearchPreferences, profile.BlockedCompanies, nullString(profile.MatcherName))
-	if err != nil { http.Error(w, "profile save failed", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "profile save failed", http.StatusInternalServerError)
+		return
+	}
 	end := s.Now().UTC()
 	start := end.AddDate(0, 0, -7)
-	if err := s.MatchRunner.RunPriorWeek(r.Context(), u.ID, start, end); err != nil { http.Error(w, "match kickoff failed", http.StatusBadGateway); return }
-	s.recordHistory(r.Context(), u.ID, "profile_saved", clientIP(r), map[string]any{"match_window_start":start.Format(time.RFC3339Nano), "match_window_end":end.Format(time.RFC3339Nano)})
+	if err := s.MatchRunner.RunPriorWeek(r.Context(), u.ID, start, end); err != nil {
+		http.Error(w, "match kickoff failed", http.StatusBadGateway)
+		return
+	}
+	s.recordHistory(r.Context(), u.ID, "profile_saved", clientIP(r), map[string]any{"match_window_start": start.Format(time.RFC3339Nano), "match_window_end": end.Format(time.RFC3339Nano)})
 	profile.LastMatchRunMessage = "Saved; prior-week match run requested."
 	s.render(w, r, "onboarding.html", pageData{Title: "Onboarding", User: u, Notice: profile.LastMatchRunMessage, Profile: profile, CSRF: s.csrf(w, r)})
 }
 
 func (s *Server) jobsList(w http.ResponseWriter, r *http.Request, u *user) {
 	jobs, err := s.loadJobs(r.Context(), u.ID, 0)
-	if err != nil { http.Error(w, "jobs failed", http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, "jobs failed", http.StatusInternalServerError)
+		return
+	}
 	s.render(w, r, "jobs.html", pageData{Title: "Job matches", User: u, Jobs: jobs, CSRF: s.csrf(w, r)})
 }
 
 func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request, u *user) {
 	idText := strings.TrimPrefix(r.URL.Path, "/jobs/")
 	id, err := strconv.ParseInt(idText, 10, 64)
-	if err != nil { http.NotFound(w, r); return }
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	jobs, err := s.loadJobs(r.Context(), u.ID, id)
-	if err != nil { http.Error(w, "job failed", http.StatusInternalServerError); return }
-	if len(jobs) == 0 { http.NotFound(w, r); return }
+	if err != nil {
+		http.Error(w, "job failed", http.StatusInternalServerError)
+		return
+	}
+	if len(jobs) == 0 {
+		http.NotFound(w, r)
+		return
+	}
 	s.render(w, r, "job.html", pageData{Title: jobs[0].Title, User: u, Job: &jobs[0], CSRF: s.csrf(w, r)})
 }
 
@@ -322,16 +370,22 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, *user
 
 func (s *Server) currentUser(r *http.Request) (*user, bool) {
 	c, err := r.Cookie(sessionCookieName)
-	if err != nil { return nil, false }
+	if err != nil {
+		return nil, false
+	}
 	uid, ok := s.verifySession(c.Value)
-	if !ok { return nil, false }
+	if !ok {
+		return nil, false
+	}
 	u, err := s.findUserByID(r.Context(), uid)
 	return u, err == nil
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if data.CSRF == "" { data.CSRF = s.csrf(w, r) }
+	if data.CSRF == "" {
+		data.CSRF = s.csrf(w, r)
+	}
 	if err := s.Templates.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, "template failed", http.StatusInternalServerError)
 	}
@@ -351,16 +405,24 @@ func (s *Server) findUserByID(ctx context.Context, id int64) (*user, error) {
 
 func (s *Server) issueCode(ctx context.Context, email, purpose, ip string) error {
 	u, err := s.findUserByEmail(ctx, email)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	code, err := numericCode()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	sum := sha256.Sum256([]byte(code))
 	expires := s.Now().UTC().Add(codeTTL)
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO web_auth_codes(user_id, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)`, u.ID, purpose, hex.EncodeToString(sum[:]), expires.Format(time.RFC3339Nano))
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	codeID, _ := res.LastInsertId()
-	data := map[string]any{"purpose":purpose, "code_id":codeID, "expires_at":expires.Format(time.RFC3339Nano)}
-	if err := s.recordHistory(ctx, u.ID, "auth_code_issued", ip, data); err != nil { return err }
+	data := map[string]any{"purpose": purpose, "code_id": codeID, "expires_at": expires.Format(time.RFC3339Nano)}
+	if err := s.recordHistory(ctx, u.ID, "auth_code_issued", ip, data); err != nil {
+		return err
+	}
 	return s.Notifier.SendCode(ctx, email, code)
 }
 
@@ -369,7 +431,9 @@ func (s *Server) verifyCode(ctx context.Context, userID int64, code, purpose str
 	want := hex.EncodeToString(sum[:])
 	now := s.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE web_auth_codes
 		SET consumed_at = ?
@@ -379,10 +443,16 @@ func (s *Server) verifyCode(ctx context.Context, userID int64, code, purpose str
 			ORDER BY auth_code_id DESC
 			LIMIT 1
 		) AND consumed_at IS NULL`, now, userID, purpose, want, now)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	changed, err := res.RowsAffected()
-	if err != nil || changed != 1 { return false }
-	if _, err := tx.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, data_json) VALUES (?, 'auth_code_used', ?)`, userID, mustJSON(map[string]any{"purpose":purpose})); err != nil { return false }
+	if err != nil || changed != 1 {
+		return false
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, data_json) VALUES (?, 'auth_code_used', ?)`, userID, mustJSON(map[string]any{"purpose": purpose})); err != nil {
+		return false
+	}
 	return tx.Commit() == nil
 }
 
@@ -396,7 +466,9 @@ func ensureWebStorage(ctx context.Context, conn *sql.DB) error {
 		consumed_at TEXT,
 		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	)`)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	_, err = conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_web_auth_codes_lookup ON web_auth_codes(user_id, purpose, code_hash, consumed_at, expires_at)`)
 	return err
 }
@@ -426,15 +498,22 @@ func (s *Server) loadJobs(ctx context.Context, userID, matchID int64) ([]jobDige
 		JOIN job_boards b ON b.board_id = l.board_id
 		WHERE m.user_id = ?`
 	args := []any{userID}
-	if matchID != 0 { query += ` AND m.job_match_id = ?`; args = append(args, matchID) }
+	if matchID != 0 {
+		query += ` AND m.job_match_id = ?`
+		args = append(args, matchID)
+	}
 	query += ` ORDER BY m.created_at DESC LIMIT 100`
 	rows, err := s.DB.QueryContext(ctx, query, args...)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var jobs []jobDigest
 	for rows.Next() {
 		var j jobDigest
-		if err := rows.Scan(&j.MatchID, &j.ListingID, &j.Version, &j.Title, &j.Company, &j.CanonicalURL, &j.Rating, &j.Decision, &j.CreatedAt, &j.Summary); err != nil { return nil, err }
+		if err := rows.Scan(&j.MatchID, &j.ListingID, &j.Version, &j.Title, &j.Company, &j.CanonicalURL, &j.Rating, &j.Decision, &j.CreatedAt, &j.Summary); err != nil {
+			return nil, err
+		}
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
@@ -444,24 +523,34 @@ func (s *Server) setSession(w http.ResponseWriter, userID int64) {
 	exp := s.Now().UTC().Add(sessionTTL).Unix()
 	payload := fmt.Sprintf("%d:%d", userID, exp)
 	sig := sign(s.SessionKey, payload)
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: base64.RawURLEncoding.EncodeToString([]byte(payload+":"+sig)), Path: "/", Expires: time.Unix(exp, 0), HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: base64.RawURLEncoding.EncodeToString([]byte(payload + ":" + sig)), Path: "/", Expires: time.Unix(exp, 0), HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
 func (s *Server) verifySession(value string) (int64, bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil { return 0, false }
+	if err != nil {
+		return 0, false
+	}
 	parts := strings.Split(string(raw), ":")
-	if len(parts) != 3 { return 0, false }
+	if len(parts) != 3 {
+		return 0, false
+	}
 	payload := parts[0] + ":" + parts[1]
-	if subtle.ConstantTimeCompare([]byte(sign(s.SessionKey, payload)), []byte(parts[2])) != 1 { return 0, false }
+	if subtle.ConstantTimeCompare([]byte(sign(s.SessionKey, payload)), []byte(parts[2])) != 1 {
+		return 0, false
+	}
 	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || s.Now().UTC().Unix() > exp { return 0, false }
+	if err != nil || s.Now().UTC().Unix() > exp {
+		return 0, false
+	}
 	uid, err := strconv.ParseInt(parts[0], 10, 64)
 	return uid, err == nil
 }
 
 func (s *Server) csrf(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie(csrfCookieName); err == nil && c.Value != "" { return c.Value }
+	if c, err := r.Cookie(csrfCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
 	tok := randomToken(24)
 	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	return tok
@@ -480,17 +569,30 @@ func sign(key []byte, payload string) string {
 
 func hashPassword(password string) (string, error) {
 	saltBytes := make([]byte, 16)
-	if _, err := rand.Read(saltBytes); err != nil { return "", err }
+	if _, err := rand.Read(saltBytes); err != nil {
+		return "", err
+	}
 	key := pbkdf2SHA256([]byte(password), saltBytes, pbkdf2Iterations, pbkdf2KeyLen)
 	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", pbkdf2Iterations, base64.RawURLEncoding.EncodeToString(saltBytes), base64.RawURLEncoding.EncodeToString(key)), nil
 }
 
 func verifyPassword(password, encoded string) bool {
 	parts := strings.Split(encoded, "$")
-	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" { return false }
-	iter, err := strconv.Atoi(parts[1]); if err != nil || iter < 100000 { return false }
-	salt, err := base64.RawURLEncoding.DecodeString(parts[2]); if err != nil { return false }
-	want, err := base64.RawURLEncoding.DecodeString(parts[3]); if err != nil { return false }
+	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
+		return false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter < 100000 {
+		return false
+	}
+	salt, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
 	got := pbkdf2SHA256([]byte(password), salt, iter, len(want))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
@@ -509,7 +611,9 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 			mac = hmac.New(sha256.New, password)
 			mac.Write(u)
 			u = mac.Sum(nil)
-			for j := range t { t[j] ^= u[j] }
+			for j := range t {
+				t[j] ^= u[j]
+			}
 		}
 		out = append(out, t...)
 	}
@@ -518,41 +622,65 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 
 func numericCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 func randomToken(n int) string {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil { panic(err) }
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func normalizeEmail(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 
-func nullable(v sql.NullString) any { if v.Valid { return v.String }; return nil }
-func nullString(v string) any { if strings.TrimSpace(v) == "" { return nil }; return strings.TrimSpace(v) }
+func nullable(v sql.NullString) any {
+	if v.Valid {
+		return v.String
+	}
+	return nil
+}
+func nullString(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return strings.TrimSpace(v)
+}
 
 func jsonList(text string) string {
 	items := strings.Split(text, "\n")
 	var out []string
-	for _, item := range items { if s := strings.TrimSpace(item); s != "" { out = append(out, s) } }
+	for _, item := range items {
+		if s := strings.TrimSpace(item); s != "" {
+			out = append(out, s)
+		}
+	}
 	raw, _ := json.Marshal(out)
 	return string(raw)
 }
 
 func jsonObjectFromText(text string) string {
 	text = strings.TrimSpace(text)
-	if text == "" { return "{}" }
+	if text == "" {
+		return "{}"
+	}
 	var obj map[string]any
-	if json.Unmarshal([]byte(text), &obj) == nil { return text }
+	if json.Unmarshal([]byte(text), &obj) == nil {
+		return text
+	}
 	raw, _ := json.Marshal(map[string]string{"notes": text})
 	return string(raw)
 }
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil { return host }
+	if err == nil {
+		return host
+	}
 	return r.RemoteAddr
 }
 
