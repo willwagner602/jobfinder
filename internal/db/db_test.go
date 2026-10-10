@@ -37,12 +37,32 @@ func TestEnsureCurrentUpgradesPreviousSchema(t *testing.T) {
 	}
 	assertVersion(t, conn, schema.CurrentVersion)
 	assertIndexExists(t, conn, "idx_job_history_service_started")
+	assertNoForeignKeyViolations(t, conn)
+
 	var boards int
 	if err := conn.QueryRow(`SELECT count(*) FROM job_boards WHERE board_url = 'https://example.com/jobs'`).Scan(&boards); err != nil {
 		t.Fatal(err)
 	}
 	if boards != 1 {
 		t.Fatalf("upgrade did not preserve fixture board, got %d", boards)
+	}
+	var versionFoundAt, versionBody, versionHash string
+	if err := conn.QueryRow(`SELECT found_at, body_text, content_hash FROM job_listing_versions WHERE job_listing_id = 1 AND version = 1`).Scan(&versionFoundAt, &versionBody, &versionHash); err != nil {
+		t.Fatal(err)
+	}
+	if versionFoundAt != "2025-01-02T03:04:05Z" || versionBody != "Build systems" || versionHash != "fixture-hash-a" {
+		t.Fatalf("version row not preserved: found_at=%q body=%q hash=%q", versionFoundAt, versionBody, versionHash)
+	}
+	var matchRating int
+	var matchDecision, matcherData string
+	if err := conn.QueryRow(`SELECT rating, decision, job_match_data_json FROM job_matches WHERE user_id = 1 AND job_listing_id = 1 AND job_listing_version = 1`).Scan(&matchRating, &matchDecision, &matcherData); err != nil {
+		t.Fatal(err)
+	}
+	if matchRating != 5 || matchDecision != "match" || matcherData != `{"reason":"fixture"}` {
+		t.Fatalf("match row not preserved: rating=%d decision=%q data=%q", matchRating, matchDecision, matcherData)
+	}
+	if _, err := conn.Exec(`INSERT INTO job_listing_versions(job_listing_id, version, found_at, title, salary, body_text, content_hash) VALUES (1, 2, '2025-01-03T03:04:05Z', 'Engineer', '$100k', 'Build systems again', 'fixture-hash-a')`); err != nil {
+		t.Fatalf("upgraded schema still rejects repeated historical content hash: %v", err)
 	}
 }
 
@@ -201,5 +221,27 @@ func assertIndexExists(t *testing.T, conn *sql.DB, name string) {
 	}
 	if count != 1 {
 		t.Fatalf("index %s missing", name)
+	}
+}
+
+func assertNoForeignKeyViolations(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	rows, err := conn.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table string
+		var rowID int64
+		var parent string
+		var fkID int64
+		if err := rows.Scan(&table, &rowID, &parent, &fkID); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("foreign key violation after migration: table=%s rowid=%d parent=%s fkid=%d", table, rowID, parent, fkID)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 }

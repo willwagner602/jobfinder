@@ -26,23 +26,38 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func EnsureCurrent(ctx context.Context, conn *sql.DB) error {
-	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
-		return err
-	}
-	tx, err := conn.BeginTx(ctx, nil)
+func EnsureCurrent(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer conn.Close()
 
-	version, err := currentVersion(ctx, tx)
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return err
+	}
+	version, err := currentVersion(ctx, conn)
 	if err != nil {
 		return err
 	}
 	if version > schema.CurrentVersion {
 		return fmt.Errorf("database schema version %d is newer than application schema version %d", version, schema.CurrentVersion)
 	}
+	if version == schema.CurrentVersion {
+		return foreignKeyCheck(ctx, conn)
+	}
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	for version < schema.CurrentVersion {
 		next := version + 1
 		if err := applyMigration(ctx, tx, next); err != nil {
@@ -50,11 +65,41 @@ func EnsureCurrent(ctx context.Context, conn *sql.DB) error {
 		}
 		version = next
 	}
-	return tx.Commit()
+	if err := foreignKeyCheck(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	return err
 }
 
 func Version(ctx context.Context, conn *sql.DB) (int, error) {
 	return currentVersion(ctx, conn)
+}
+
+type foreignKeyChecker interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func foreignKeyCheck(ctx context.Context, q foreignKeyChecker) error {
+	rows, err := q.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table string
+		var rowID int64
+		var parent string
+		var fkID int64
+		if err := rows.Scan(&table, &rowID, &parent, &fkID); err != nil {
+			return err
+		}
+		return fmt.Errorf("foreign key check failed: table=%s rowid=%d parent=%s fkid=%d", table, rowID, parent, fkID)
+	}
+	return rows.Err()
 }
 
 type queryer interface {

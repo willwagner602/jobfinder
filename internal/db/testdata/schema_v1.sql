@@ -89,4 +89,8 @@ CREATE TABLE job_history (
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 INSERT INTO schema_migrations(version) VALUES (1);
-INSERT INTO job_boards(board_url, company, ats_type, status) VALUES ('https://example.com/jobs', 'Example', 'greenhouse', 'active');
+INSERT INTO job_boards(board_id, board_url, company, ats_type, status) VALUES (1, 'https://example.com/jobs', 'Example', 'greenhouse', 'active');
+INSERT INTO users(user_id, email, status) VALUES (1, 'worker@example.com', 'live');
+INSERT INTO job_listings(job_listing_id, canonical_url, board_id, current_version, last_seen_at, posted_at, metadata_json) VALUES (1, 'https://example.com/jobs/engineer', 1, 1, '2025-01-02T03:04:05Z', NULL, '{"source":"fixture"}');
+INSERT INTO job_listing_versions(job_listing_id, version, found_at, posted_at, title, salary, body_text, content_hash) VALUES (1, 1, '2025-01-02T03:04:05Z', NULL, 'Engineer', '$100k', 'Build systems', 'fixture-hash-a');
+INSERT INTO job_matches(user_id, job_listing_id, job_listing_version, rating, decision, matcher_name, matcher_metadata_json, job_match_data_json) VALUES (1, 1, 1, 5, 'match', 'fixture', '{"model":"fixture"}', '{"reason":"fixture"}');
