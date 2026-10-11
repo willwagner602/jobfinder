@@ -54,6 +54,118 @@ func TestApproveAndSuspendUser(t *testing.T) {
 	}
 }
 
+func TestSignupDisabledRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	disabled, err := store.IsSignupDisabled(ctx)
+	if err != nil {
+		t.Fatalf("IsSignupDisabled: %v", err)
+	}
+	if disabled {
+		t.Fatal("fresh database should allow signups")
+	}
+	if err := store.SetSignupDisabled(ctx, true); err != nil {
+		t.Fatalf("SetSignupDisabled(true): %v", err)
+	}
+	disabled, err = store.IsSignupDisabled(ctx)
+	if err != nil {
+		t.Fatalf("IsSignupDisabled after set: %v", err)
+	}
+	if !disabled {
+		t.Fatal("signups_disabled was not persisted")
+	}
+	if err := store.SetSignupDisabled(ctx, false); err != nil {
+		t.Fatalf("SetSignupDisabled(false): %v", err)
+	}
+	disabled, err = store.IsSignupDisabled(ctx)
+	if err != nil {
+		t.Fatalf("IsSignupDisabled after clear: %v", err)
+	}
+	if disabled {
+		t.Fatal("signups_disabled was not cleared")
+	}
+}
+
+func TestTombstoneAndUnTombstoneUserPreserveRelatedRows(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	res, err := store.DB.ExecContext(ctx, `INSERT INTO users (email, status) VALUES ('person@example.com', 'live')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO user_configs(user_id, resume_text) VALUES (?, 'resume')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO job_boards(board_id, board_url, company, ats_type, status) VALUES (1, 'https://example.com/jobs', 'Example', 'greenhouse', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO job_listings(job_listing_id, canonical_url, board_id, current_version, last_seen_at) VALUES (1, 'https://example.com/jobs/1', 1, 1, '2025-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO job_listing_versions(job_listing_id, version, found_at, title, body_text, content_hash) VALUES (1, 1, '2025-01-01T00:00:00Z', 'Engineer', 'Body', 'hash')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO job_matches(user_id, job_listing_id, job_listing_version, matcher_name) VALUES (?, 1, 1, 'fixture')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TombstoneUser(ctx, id, "admin@example.com"); err != nil {
+		t.Fatalf("TombstoneUser: %v", err)
+	}
+	users, err := store.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users[0].Status != schema.UserStatusTombstoned {
+		t.Fatalf("tombstoned status = %q", users[0].Status)
+	}
+	if err := store.UnTombstoneUser(ctx, id, "admin@example.com"); err != nil {
+		t.Fatalf("UnTombstoneUser: %v", err)
+	}
+	users, err = store.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if users[0].Status != schema.UserStatusSuspended {
+		t.Fatalf("untombstoned status = %q, want suspended", users[0].Status)
+	}
+	for table, query := range map[string]string{
+		"user_configs": `SELECT count(*) FROM user_configs WHERE user_id = ?`,
+		"job_matches":  `SELECT count(*) FROM job_matches WHERE user_id = ?`,
+		"history":      `SELECT count(*) FROM user_history WHERE user_id = ? AND event_type IN ('admin_tombstoned_user', 'admin_untombstoned_user')`,
+	} {
+		var rows int
+		if err := store.DB.QueryRowContext(ctx, query, id).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if table == "history" {
+			want = 2
+		}
+		if rows != want {
+			t.Fatalf("%s rows = %d, want %d", table, rows, want)
+		}
+	}
+}
+
+func TestTombstoneUnknownUserIsNotFoundWithoutHistory(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if err := store.TombstoneUser(ctx, 1234, "admin@example.com"); err != ErrNotFound {
+		t.Fatalf("TombstoneUser on unknown id = %v, want ErrNotFound", err)
+	}
+	if err := store.UnTombstoneUser(ctx, 1234, "admin@example.com"); err != ErrNotFound {
+		t.Fatalf("UnTombstoneUser on unknown id = %v, want ErrNotFound", err)
+	}
+	var events int
+	if err := store.DB.QueryRowContext(ctx, `SELECT count(*) FROM user_history`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("aborted tombstone change wrote %d history rows", events)
+	}
+}
+
 func TestIssueValidateAndRevokeToken(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

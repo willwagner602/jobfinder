@@ -129,6 +129,8 @@ func applyMigration(ctx context.Context, tx *sql.Tx, version int) error {
 		return execAll(ctx, tx, migration2)
 	case 3:
 		return execAll(ctx, tx, migration3)
+	case 4:
+		return execAll(ctx, tx, migration4)
 	default:
 		return fmt.Errorf("no migration for version %d", version)
 	}
@@ -278,6 +280,33 @@ var migration3 = []string{
 	`ALTER TABLE job_boards_v3 RENAME TO job_boards`,
 	`CREATE INDEX IF NOT EXISTS idx_job_boards_status ON job_boards(status)`,
 	`INSERT INTO schema_migrations(version) VALUES (3)`,
+}
+
+var migration4 = []string{
+	`CREATE TABLE site_config (
+		config_id INTEGER PRIMARY KEY CHECK (config_id = 1),
+		signups_disabled INTEGER NOT NULL DEFAULT 0 CHECK (signups_disabled IN (0, 1)),
+		updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`,
+	`INSERT INTO site_config(config_id, signups_disabled) VALUES (1, 0)`,
+	// Tombstoned users are represented as a distinct users.status enum value.
+	// Related rows keep the existing users foreign-key behavior because user ids
+	// remain stable while only the users CHECK constraint is widened.
+	`CREATE TABLE users_v4 (
+		user_id INTEGER PRIMARY KEY,
+		email TEXT NOT NULL,
+		password_hash TEXT,
+		email_confirmed_at TEXT,
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','live','suspended','tombstoned')),
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`,
+	`INSERT INTO users_v4 (user_id, email, password_hash, email_confirmed_at, status, created_at, updated_at)
+		SELECT user_id, email, password_hash, email_confirmed_at, status, created_at, updated_at FROM users`,
+	`DROP TABLE users`,
+	`ALTER TABLE users_v4 RENAME TO users`,
+	`CREATE UNIQUE INDEX idx_users_email_active ON users(email) WHERE status <> 'tombstoned'`,
+	`INSERT INTO schema_migrations(version) VALUES (4)`,
 }
 
 type ListingVersionInput struct {

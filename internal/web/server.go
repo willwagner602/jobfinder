@@ -206,7 +206,7 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		}
 		hash = sql.NullString{String: encoded, Valid: true}
 	}
-	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
+	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
 	if err != nil {
 		http.Error(w, "signup failed", http.StatusInternalServerError)
 		return

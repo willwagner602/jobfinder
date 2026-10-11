@@ -8,7 +8,7 @@ import (
 )
 
 // CurrentVersion is the schema version expected by all services in this build.
-const CurrentVersion = 3
+const CurrentVersion = 4
 
 type ProcessStatus string
 
@@ -29,9 +29,10 @@ const (
 type UserStatus string
 
 const (
-	UserStatusPending   UserStatus = "pending"
-	UserStatusLive      UserStatus = "live"
-	UserStatusSuspended UserStatus = "suspended"
+	UserStatusPending    UserStatus = "pending"
+	UserStatusLive       UserStatus = "live"
+	UserStatusSuspended  UserStatus = "suspended"
+	UserStatusTombstoned UserStatus = "tombstoned"
 )
 
 type JobMatchDecision string

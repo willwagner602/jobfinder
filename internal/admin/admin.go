@@ -104,6 +104,41 @@ func (s Store) SuspendUser(ctx context.Context, userID int64, adminEmail string)
 	return s.setUserStatus(ctx, userID, schema.UserStatusSuspended, "admin_suspended_user", adminEmail)
 }
 
+func (s Store) TombstoneUser(ctx context.Context, userID int64, adminEmail string) error {
+	return s.setUserStatus(ctx, userID, schema.UserStatusTombstoned, "admin_tombstoned_user", adminEmail)
+}
+
+func (s Store) UnTombstoneUser(ctx context.Context, userID int64, adminEmail string) error {
+	return s.setUserStatus(ctx, userID, schema.UserStatusSuspended, "admin_untombstoned_user", adminEmail)
+}
+
+func (s Store) IsSignupDisabled(ctx context.Context) (bool, error) {
+	var disabled int
+	if err := s.DB.QueryRowContext(ctx, `SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&disabled); err != nil {
+		return false, err
+	}
+	return disabled != 0, nil
+}
+
+func (s Store) SetSignupDisabled(ctx context.Context, want bool) error {
+	disabled := 0
+	if want {
+		disabled = 1
+	}
+	res, err := s.DB.ExecContext(ctx, `UPDATE site_config SET signups_disabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE config_id = 1`, disabled)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s Store) setUserStatus(ctx context.Context, userID int64, status schema.UserStatus, eventType, adminEmail string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
