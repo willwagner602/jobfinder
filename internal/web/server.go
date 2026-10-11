@@ -197,27 +197,6 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is required", CSRF: s.csrf(w, r)})
 		return
 	}
-	var signupsDisabled int
-	if err := s.DB.QueryRowContext(r.Context(), `SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&signupsDisabled); err != nil {
-		http.Error(w, "signup failed", http.StatusInternalServerError)
-		return
-	}
-	if signupsDisabled != 0 {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Signups are currently disabled", CSRF: s.csrf(w, r)})
-		return
-	}
-	var existingStatus string
-	err := s.DB.QueryRowContext(r.Context(), `SELECT status FROM users WHERE email = ? AND status = ? LIMIT 1`, email, schema.UserStatusTombstoned).Scan(&existingStatus)
-	if err != nil && err != sql.ErrNoRows {
-		http.Error(w, "signup failed", http.StatusInternalServerError)
-		return
-	}
-	if err == nil {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is not available for signup", CSRF: s.csrf(w, r)})
-		return
-	}
 	var hash sql.NullString
 	if password != "" {
 		encoded, err := hashPassword(password)
@@ -227,16 +206,101 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		}
 		hash = sql.NullString{String: encoded, Valid: true}
 	}
-	_, err = s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
+	err := s.createSignupAndIssueCode(r.Context(), email, hash, clientIP(r), nil)
+	if errors.Is(err, errSignupsDisabled) {
+		w.WriteHeader(http.StatusForbidden)
+		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Signups are currently disabled", CSRF: s.csrf(w, r)})
+		return
+	}
+	if errors.Is(err, errEmailNotAvailable) {
+		w.WriteHeader(http.StatusForbidden)
+		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is not available for signup", CSRF: s.csrf(w, r)})
+		return
+	}
 	if err != nil {
 		http.Error(w, "signup failed", http.StatusInternalServerError)
 		return
 	}
-	if err := s.issueCode(r.Context(), email, "signup", clientIP(r)); err != nil {
-		http.Error(w, "verification code failed", http.StatusInternalServerError)
-		return
-	}
 	http.Redirect(w, r, "/verify?email="+urlQuery(email), http.StatusSeeOther)
+}
+
+var (
+	errSignupsDisabled   = errors.New("signups disabled")
+	errEmailNotAvailable = errors.New("email not available for signup")
+)
+
+func (s *Server) createSignupAndIssueCode(ctx context.Context, email string, hash sql.NullString, ip string, afterBegin func(context.Context) error) error {
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	if afterBegin != nil {
+		if err := afterBegin(ctx); err != nil {
+			return err
+		}
+	}
+	var signupsDisabled int
+	if err := conn.QueryRowContext(ctx, `SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&signupsDisabled); err != nil {
+		return err
+	}
+	if signupsDisabled != 0 {
+		return errSignupsDisabled
+	}
+	var existingStatus string
+	err = conn.QueryRowContext(ctx, `SELECT status FROM users WHERE email = ?`, email).Scan(&existingStatus)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil && existingStatus == string(schema.UserStatusTombstoned) {
+		return errEmailNotAvailable
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending); err != nil {
+		return err
+	}
+	if err := s.issueCodeOnConn(ctx, conn, email, "signup", ip); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Server) issueCodeOnConn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, email, purpose, ip string) error {
+	var userID int64
+	if err := q.QueryRowContext(ctx, `SELECT user_id FROM users WHERE email = ?`, email).Scan(&userID); err != nil {
+		return err
+	}
+	code, err := numericCode()
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256([]byte(code))
+	expires := s.Now().UTC().Add(codeTTL)
+	res, err := q.ExecContext(ctx, `INSERT INTO web_auth_codes(user_id, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)`, userID, purpose, hex.EncodeToString(sum[:]), expires.Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	codeID, _ := res.LastInsertId()
+	data := map[string]any{"purpose": purpose, "code_id": codeID, "expires_at": expires.Format(time.RFC3339Nano)}
+	if _, err := q.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, inbound_ip, data_json) VALUES (?, ?, ?, ?)`, userID, "auth_code_issued", nullString(ip), mustJSON(data)); err != nil {
+		return err
+	}
+	return s.Notifier.SendCode(ctx, email, code)
 }
 
 func (s *Server) verifyForm(w http.ResponseWriter, r *http.Request) {
@@ -425,26 +489,7 @@ func (s *Server) findUserByID(ctx context.Context, id int64) (*user, error) {
 }
 
 func (s *Server) issueCode(ctx context.Context, email, purpose, ip string) error {
-	u, err := s.findUserByEmail(ctx, email)
-	if err != nil {
-		return err
-	}
-	code, err := numericCode()
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256([]byte(code))
-	expires := s.Now().UTC().Add(codeTTL)
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO web_auth_codes(user_id, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)`, u.ID, purpose, hex.EncodeToString(sum[:]), expires.Format(time.RFC3339Nano))
-	if err != nil {
-		return err
-	}
-	codeID, _ := res.LastInsertId()
-	data := map[string]any{"purpose": purpose, "code_id": codeID, "expires_at": expires.Format(time.RFC3339Nano)}
-	if err := s.recordHistory(ctx, u.ID, "auth_code_issued", ip, data); err != nil {
-		return err
-	}
-	return s.Notifier.SendCode(ctx, email, code)
+	return s.issueCodeOnConn(ctx, s.DB, email, purpose, ip)
 }
 
 func (s *Server) verifyCode(ctx context.Context, userID int64, code, purpose string) bool {

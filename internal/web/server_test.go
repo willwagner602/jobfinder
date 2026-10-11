@@ -3,15 +3,18 @@ package web
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"jobs.willwagner.me/internal/admin"
 	"jobs.willwagner.me/internal/db"
 	"jobs.willwagner.me/internal/schema"
 )
@@ -191,6 +194,90 @@ func TestSignupStillHandlesSuspendedEmailWithExistingUpsert(t *testing.T) {
 	}
 	if users != 1 {
 		t.Fatalf("users with suspended email = %d, want 1", users)
+	}
+}
+
+func TestSignupTransactionRechecksTombstoneAfterEarlierLiveObservation(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	uid := insertLiveUser(t, s.DB, "race@example.com")
+
+	var earlierStatus string
+	if err := s.DB.QueryRow(`SELECT status FROM users WHERE email = 'race@example.com'`).Scan(&earlierStatus); err != nil {
+		t.Fatal(err)
+	}
+	if earlierStatus != string(schema.UserStatusLive) {
+		t.Fatalf("earlier status = %q, want live", earlierStatus)
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET status = ? WHERE user_id = ?`, schema.UserStatusTombstoned, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.createSignupAndIssueCode(context.Background(), "race@example.com", sql.NullString{}, "127.0.0.1", nil)
+	if !errors.Is(err, errEmailNotAvailable) {
+		t.Fatalf("createSignupAndIssueCode error = %v, want errEmailNotAvailable", err)
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'race@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with raced email = %d, want 1", users)
+	}
+	if notifier.codes["race@example.com"] != "" {
+		t.Fatal("signup sent verification code after tombstone")
+	}
+}
+
+func TestSignupImmediateTransactionBlocksConcurrentTombstone(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "signup-race.db")
+	conn, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWebStorage(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`PRAGMA busy_timeout = 1`); err != nil {
+		t.Fatal(err)
+	}
+	adminConn, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { adminConn.Close() })
+	if _, err := adminConn.Exec(`PRAGMA busy_timeout = 1`); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &captureNotifier{}
+	s := &Server{DB: conn, Notifier: notifier, MatchRunner: &captureRunner{}, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+	uid := insertLiveUser(t, conn, "locked@example.com")
+
+	var tombstoneErr error
+	err = s.createSignupAndIssueCode(context.Background(), "locked@example.com", sql.NullString{}, "127.0.0.1", func(ctx context.Context) error {
+		tombstoneErr = admin.Store{DB: adminConn}.TombstoneUser(ctx, uid, "ops@example.com")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("createSignupAndIssueCode: %v", err)
+	}
+	if tombstoneErr == nil {
+		t.Fatal("concurrent tombstone succeeded while signup BEGIN IMMEDIATE transaction was open")
+	}
+	var status string
+	if err := conn.QueryRow(`SELECT status FROM users WHERE user_id = ?`, uid).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(schema.UserStatusLive) {
+		t.Fatalf("status after blocked tombstone = %q, want live", status)
+	}
+	if notifier.codes["locked@example.com"] == "" {
+		t.Fatal("signup did not send verification code")
 	}
 }
 
