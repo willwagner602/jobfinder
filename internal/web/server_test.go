@@ -110,6 +110,90 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 	}
 }
 
+func TestSignupDisabledBlocksSignup(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`UPDATE site_config SET signups_disabled = 1 WHERE config_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"closed@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("signup status = %d, want %d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Signups are currently disabled") {
+		t.Fatalf("signup body missing disabled message: %s", rec.Body.String())
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'closed@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 0 {
+		t.Fatalf("users created = %d, want 0", users)
+	}
+	if notifier.codes["closed@example.com"] != "" {
+		t.Fatal("signup sent verification code while disabled")
+	}
+}
+
+func TestSignupRefusesTombstonedEmail(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "gone@example.com", schema.UserStatusTombstoned); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"gone@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("signup status = %d, want %d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Email is not available for signup") {
+		t.Fatalf("signup body missing generic refusal: %s", rec.Body.String())
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'gone@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with tombstoned email = %d, want 1", users)
+	}
+	if notifier.codes["gone@example.com"] != "" {
+		t.Fatal("signup sent verification code for tombstoned email")
+	}
+}
+
+func TestSignupStillHandlesSuspendedEmailWithExistingUpsert(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "suspended@example.com", schema.UserStatusSuspended); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"suspended@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/verify?email=suspended%40example.com" {
+		t.Fatalf("signup status=%d location=%q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	if notifier.codes["suspended@example.com"] == "" {
+		t.Fatal("signup did not send verification code for suspended email")
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'suspended@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with suspended email = %d, want 1", users)
+	}
+}
+
 func TestCodeIsConsumedOnce(t *testing.T) {
 	notifier := &captureNotifier{}
 	s := newTestServer(t)

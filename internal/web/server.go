@@ -197,6 +197,27 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is required", CSRF: s.csrf(w, r)})
 		return
 	}
+	var signupsDisabled int
+	if err := s.DB.QueryRowContext(r.Context(), `SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&signupsDisabled); err != nil {
+		http.Error(w, "signup failed", http.StatusInternalServerError)
+		return
+	}
+	if signupsDisabled != 0 {
+		w.WriteHeader(http.StatusForbidden)
+		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Signups are currently disabled", CSRF: s.csrf(w, r)})
+		return
+	}
+	var existingStatus string
+	err := s.DB.QueryRowContext(r.Context(), `SELECT status FROM users WHERE email = ? AND status = ? LIMIT 1`, email, schema.UserStatusTombstoned).Scan(&existingStatus)
+	if err != nil && err != sql.ErrNoRows {
+		http.Error(w, "signup failed", http.StatusInternalServerError)
+		return
+	}
+	if err == nil {
+		w.WriteHeader(http.StatusForbidden)
+		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is not available for signup", CSRF: s.csrf(w, r)})
+		return
+	}
 	var hash sql.NullString
 	if password != "" {
 		encoded, err := hashPassword(password)
@@ -206,7 +227,7 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		}
 		hash = sql.NullString{String: encoded, Valid: true}
 	}
-	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
+	_, err = s.DB.ExecContext(r.Context(), `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending)
 	if err != nil {
 		http.Error(w, "signup failed", http.StatusInternalServerError)
 		return
