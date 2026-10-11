@@ -26,6 +26,8 @@ jobs:
         run: |
           go test ./...
           bash deploy/check-coverage.sh
+      - name: Integration tests
+        run: go test ./internal/itests/...
       - name: Record tested commit tag
         if: github.event_name == 'push'
         run: |
