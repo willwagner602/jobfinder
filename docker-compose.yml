@@ -11,7 +11,7 @@ services:
       JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-}
       JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-}
       JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-}
-      JOBS_SMTP_FROM: jobs@willwagner.me
+      JOBS_SMTP_FROM: job-search@willwagner.me
     ports:
       - "8081:8081"
     volumes:
@@ -34,7 +34,7 @@ services:
       JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:?set JOBS_SMTP_ADDR}
       JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:?set JOBS_SMTP_USERNAME}
       JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:?set JOBS_SMTP_PASSWORD}
-      JOBS_SMTP_FROM: jobs@willwagner.me
+      JOBS_SMTP_FROM: job-search@willwagner.me
     ports:
       - "8080:8080"
     volumes:
