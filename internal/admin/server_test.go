@@ -83,6 +83,48 @@ func TestAdminRoutesRequireToken(t *testing.T) {
 	}
 }
 
+func TestNewAdminRoutesRequireTokenIncludingWrongMethodBlockers(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	id := newUser(t, store.DB, "person@example.com", "live")
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/admin/users/" + strconv.FormatInt(id, 10), ""},
+		{http.MethodGet, "/admin/users/approve", ""},
+		{http.MethodGet, "/admin/users/suspend", ""},
+		{http.MethodGet, "/admin/users/tombstone", ""},
+		{http.MethodGet, "/admin/users/untombstone", ""},
+		{http.MethodPost, "/admin/users/tombstone", "user_id=" + strconv.FormatInt(id, 10)},
+		{http.MethodPost, "/admin/users/untombstone", "user_id=" + strconv.FormatInt(id, 10)},
+		{http.MethodPost, "/admin/signups", "signups_disabled=true"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		if tc.method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		assertStatus(t, res, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthenticatedUserActionGetBlockersReturnMethodNotAllowed(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+
+	for _, path := range []string{"/admin/users/approve", "/admin/users/suspend", "/admin/users/tombstone", "/admin/users/untombstone"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		assertStatus(t, res, http.StatusMethodNotAllowed)
+	}
+}
+
 func TestProcessHistoryPageShowsCountsAndErrors(t *testing.T) {
 	store := newTestStore(t)
 	_, err := store.DB.Exec(`INSERT INTO job_history (service, started_at, status, items_processed, error_json) VALUES ('job-match', '2025-01-01T00:00:00Z', 'failure', 1, '{"error":"boom"}')`)
@@ -305,6 +347,114 @@ func TestUserDetailPageShowsUserConfigHistoryAndRecentMatches(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail page missing %q: %s", want, body)
 		}
+	}
+}
+
+func TestUserDetailRouteValidatesIDAndUnknownUser(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/admin/users/not-a-number", http.StatusBadRequest},
+		{"/admin/users/0", http.StatusBadRequest},
+		{"/admin/users/424242", http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		assertStatus(t, res, tc.want)
+	}
+}
+
+func TestUserDetailPageHandlesMissingOptionalRows(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	id := newUser(t, store.DB, "minimal@example.com", "pending")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/users/"+strconv.FormatInt(id, 10), nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assertStatus(t, res, http.StatusOK)
+	body := res.Body.String()
+	for _, want := range []string{"minimal@example.com", "No user_configs row exists", "Recent job_matches"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("minimal detail page missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestTombstoneRoutesValidateInputAndUnknownIDs(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+
+	for _, tc := range []struct {
+		path string
+		form url.Values
+		want int
+	}{
+		{"/admin/users/tombstone", url.Values{"user_id": {""}}, http.StatusBadRequest},
+		{"/admin/users/tombstone", url.Values{"user_id": {"abc"}}, http.StatusBadRequest},
+		{"/admin/users/tombstone", url.Values{"user_id": {"424242"}}, http.StatusNotFound},
+		{"/admin/users/untombstone", url.Values{"user_id": {"0"}}, http.StatusBadRequest},
+		{"/admin/users/untombstone", url.Values{"user_id": {"-1"}}, http.StatusBadRequest},
+		{"/admin/users/untombstone", url.Values{"user_id": {"424242"}}, http.StatusNotFound},
+	} {
+		res := postForm(t, handler, tc.path, tc.form)
+		assertStatus(t, res, tc.want)
+	}
+}
+
+func TestSignupToggleRejectsUnparseableBodyAndReportsStoreErrors(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	badBody := httptest.NewRequest(http.MethodPost, "/admin/signups", strings.NewReader("%zz"))
+	badBody.Header.Set("Authorization", "Bearer secret")
+	badBody.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	badBodyRes := httptest.NewRecorder()
+	handler.ServeHTTP(badBodyRes, badBody)
+	assertStatus(t, badBodyRes, http.StatusBadRequest)
+
+	if _, err := store.DB.Exec(`DELETE FROM site_config WHERE config_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	missingRow := postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"true"}})
+	assertStatus(t, missingRow, http.StatusNotFound)
+}
+
+func TestNewServerPagesReportSignupStatusReadFailure(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	if _, err := store.DB.Exec(`DROP TABLE site_config`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assertStatus(t, res, http.StatusOK)
+	if body := res.Body.String(); !strings.Contains(body, "Unable to read signup status") {
+		t.Fatalf("missing signup status read failure: %s", body)
+	}
+}
+
+func TestLoadUserDetailReportsRelatedRowScanErrors(t *testing.T) {
+	store := newTestStore(t)
+	server := NewServer(store.DB, "secret", nil)
+	id := newUser(t, store.DB, "scan@example.com", "live")
+	if _, err := store.DB.Exec(`INSERT INTO user_configs(user_id) VALUES (?)`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`DROP TABLE user_history`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.loadUserDetail(context.Background(), id); err == nil {
+		t.Fatal("loadUserDetail should report missing user_history")
 	}
 }
 
