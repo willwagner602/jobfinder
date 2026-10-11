@@ -187,6 +187,127 @@ func TestApproveAndSuspendRoutesRedirectOnSuccessAndValidateInput(t *testing.T) 
 	assertStatus(t, unknown, http.StatusNotFound)
 }
 
+func TestUserManagementPageIncludesNewControlsAndAdaptiveSidebar(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	id := newUser(t, store.DB, "person@example.com", "pending")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	getReq.Header.Set("Authorization", "Bearer secret")
+	getRes := httptest.NewRecorder()
+	handler.ServeHTTP(getRes, getReq)
+	assertStatus(t, getRes, http.StatusOK)
+	body := getRes.Body.String()
+	for _, want := range []string{
+		"href=\"/admin/users/" + strconv.FormatInt(id, 10) + "\"",
+		"/admin/users/tombstone",
+		"/admin/signups",
+		"Dark mode",
+		"☰ Menu",
+		"href=\"/admin/tokens\"",
+		"href=\"/admin/process-history\"",
+		"Suspend</strong> removes login access",
+		"Tombstone</strong> is the delete action",
+		"border-radius",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("users page missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestTombstoneAndUnTombstoneRoutesRedirectAndRecordDistinctStatus(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	id := newUser(t, store.DB, "person@example.com", "live")
+
+	res := postForm(t, handler, "/admin/users/tombstone", url.Values{"user_id": {strconv.FormatInt(id, 10)}, "admin_email": {"ops@example.com"}})
+	assertStatus(t, res, http.StatusSeeOther)
+	if got := res.Header().Get("Location"); got != "/admin" {
+		t.Fatalf("tombstone redirect target = %q", got)
+	}
+	var status string
+	if err := store.DB.QueryRow(`SELECT status FROM users WHERE user_id = ?`, id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "tombstoned" {
+		t.Fatalf("status after tombstone = %q", status)
+	}
+
+	res = postForm(t, handler, "/admin/users/untombstone", url.Values{"user_id": {strconv.FormatInt(id, 10)}, "admin_email": {"ops@example.com"}})
+	assertStatus(t, res, http.StatusSeeOther)
+	if err := store.DB.QueryRow(`SELECT status FROM users WHERE user_id = ?`, id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "suspended" {
+		t.Fatalf("status after untombstone = %q", status)
+	}
+}
+
+func TestSignupToggleRouteUpdatesSiteConfig(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+
+	res := postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"true"}})
+	assertStatus(t, res, http.StatusSeeOther)
+	disabled, err := store.IsSignupDisabled(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !disabled {
+		t.Fatal("signups should be disabled")
+	}
+
+	res = postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"false"}})
+	assertStatus(t, res, http.StatusSeeOther)
+	disabled, err = store.IsSignupDisabled(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled {
+		t.Fatal("signups should be enabled")
+	}
+}
+
+func TestUserDetailPageShowsUserConfigHistoryAndRecentMatches(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewServer(store.DB, "secret", nil).Routes()
+	id := newUser(t, store.DB, "detail@example.com", "live")
+	if _, err := store.DB.Exec(`UPDATE users SET password_hash = 'hash-value', email_confirmed_at = '2025-01-01T00:00:00Z' WHERE user_id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, search_preferences_json, blocked_companies_json, matcher_name) VALUES (?, 'resume body', 'experience body', '["Engineer"]', '{"remote":true}', '["NopeCo"]', 'default')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO user_history(user_id, event_type, inbound_ip, data_json) VALUES (?, 'profile_saved', '127.0.0.1', '{"ok":true}')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_boards(board_url, company) VALUES ('https://jobs.example.com', 'ExampleCo')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_listings(job_listing_id, canonical_url, board_id, current_version) VALUES (1, 'https://jobs.example.com/1', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_listing_versions(job_listing_id, version, found_at, title, body_text, content_hash) VALUES (1, 1, '2025-01-02T00:00:00Z', 'Role', 'Body', 'hash')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_matches(user_id, job_listing_id, job_listing_version, rating, decision, matcher_name, matcher_metadata_json, job_match_data_json) VALUES (?, 1, 1, 5, 'match', 'default', '{"model":"test"}', '{"why":"fit"}')`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/users/"+strconv.FormatInt(id, 10), nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assertStatus(t, res, http.StatusOK)
+	body := res.Body.String()
+	for _, want := range []string{"detail@example.com", "password_hash", "hash-value", "resume_text", "resume body", "experience_text", "experience body", "desired_titles_json", "Engineer", "user_history_id", "profile_saved", "job_match_id", "matcher_metadata_json", "model", "job_match_data_json", "fit"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("detail page missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestTokensPageListsIssuedAndRevokedTokens(t *testing.T) {
 	store := newTestStore(t)
 	handler := NewServer(store.DB, "secret", nil).Routes()
