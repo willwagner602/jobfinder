@@ -294,7 +294,7 @@ var migration4 = []string{
 	// remain stable while only the users CHECK constraint is widened.
 	`CREATE TABLE users_v4 (
 		user_id INTEGER PRIMARY KEY,
-		email TEXT NOT NULL UNIQUE,
+		email TEXT NOT NULL,
 		password_hash TEXT,
 		email_confirmed_at TEXT,
 		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','live','suspended','tombstoned')),
@@ -305,6 +305,7 @@ var migration4 = []string{
 		SELECT user_id, email, password_hash, email_confirmed_at, status, created_at, updated_at FROM users`,
 	`DROP TABLE users`,
 	`ALTER TABLE users_v4 RENAME TO users`,
+	`CREATE UNIQUE INDEX idx_users_email_active ON users(email) WHERE status <> 'tombstoned'`,
 	`INSERT INTO schema_migrations(version) VALUES (4)`,
 }
 

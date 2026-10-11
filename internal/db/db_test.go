@@ -167,6 +167,22 @@ func TestEnsureCurrentUpgradesSchemaV3ToV4PreservingUserRelatedRows(t *testing.T
 	}
 }
 
+func TestTombstonedUsersDoNotOccupySignupEmail(t *testing.T) {
+	conn := openCurrentTestDB(t)
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('same@example.com', ?)`, schema.UserStatusTombstoned); err != nil {
+		t.Fatalf("insert tombstoned user: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('same@example.com', ?)`, schema.UserStatusPending); err != nil {
+		t.Fatalf("tombstoned email blocked pending signup: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('suspended@example.com', ?)`, schema.UserStatusSuspended); err != nil {
+		t.Fatalf("insert suspended user: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('suspended@example.com', ?)`, schema.UserStatusPending); err == nil {
+		t.Fatal("suspended email allowed duplicate pending signup")
+	}
+}
+
 func TestListingIdentityVersioningAndImmutability(t *testing.T) {
 	conn := openCurrentTestDB(t)
 	ctx := context.Background()
