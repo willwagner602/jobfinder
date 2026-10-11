@@ -128,10 +128,8 @@ func TestTombstonedUserLoginRejectedAndSignupPolicyDocumented(t *testing.T) {
 	client := newClient(t)
 	getCSRF(t, client, h.webURL("/signup"))
 	res := postForm(t, client, h.webURL("/signup"), url.Values{"email": {"tombstone@example.com"}, "password": {"new correct horse battery staple"}, "csrf": {csrfFromJar(t, client, h.webBase)}})
-	if res.StatusCode == http.StatusSeeOther {
-		t.Skip("current read-only web signup allows re-signup for tombstoned emails because idx_users_email_active excludes tombstoned rows; rejecting that signup needs a web/schema contract change outside internal/itests")
-	}
-	assertBodyContains(t, res, "signup failed")
+	assertStatus(t, res, http.StatusForbidden)
+	assertBodyContains(t, res, "Email is not available for signup")
 }
 
 func TestAdminProcessHistoryPageRendersCounts(t *testing.T) {
@@ -159,10 +157,8 @@ func TestSignupDisabledSiteConfigBlocksSignupWhenWebEnforcesIt(t *testing.T) {
 	client := newClient(t)
 	getCSRF(t, client, h.webURL("/signup"))
 	res := postForm(t, client, h.webURL("/signup"), url.Values{"email": {"closed@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrfFromJar(t, client, h.webBase)}})
-	if res.StatusCode == http.StatusSeeOther {
-		t.Skip("site_config.signups_disabled exists, but current read-only web signup does not enforce it; admin exposes no HTTP config route yet")
-	}
 	assertStatus(t, res, http.StatusForbidden)
+	assertBodyContains(t, res, "Signups are currently disabled")
 }
 
 type harness struct {

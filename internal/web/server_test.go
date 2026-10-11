@@ -3,15 +3,18 @@ package web
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"jobs.willwagner.me/internal/admin"
 	"jobs.willwagner.me/internal/db"
 	"jobs.willwagner.me/internal/schema"
 )
@@ -19,6 +22,49 @@ import (
 type captureNotifier struct{ codes map[string]string }
 
 func (n *captureNotifier) SendCode(_ context.Context, email, code string) error {
+	if n.codes == nil {
+		n.codes = map[string]string{}
+	}
+	n.codes[email] = code
+	return nil
+}
+
+type failingNotifier struct {
+	codes map[string]string
+	err   error
+}
+
+func (n *failingNotifier) SendCode(_ context.Context, email, code string) error {
+	if n.codes == nil {
+		n.codes = map[string]string{}
+	}
+	n.codes[email] = code
+	if n.err != nil {
+		return n.err
+	}
+	return errors.New("send failed")
+}
+
+type commitAwareNotifier struct {
+	t       *testing.T
+	db      *sql.DB
+	userID  int64
+	codes   map[string]string
+	checked bool
+}
+
+func (n *commitAwareNotifier) SendCode(_ context.Context, email, code string) error {
+	n.checked = true
+	var codes int
+	if err := n.db.QueryRow(`SELECT count(*) FROM web_auth_codes WHERE user_id = ?`, n.userID).Scan(&codes); err != nil {
+		n.t.Fatalf("query auth codes during SendCode: %v", err)
+	}
+	if codes != 1 {
+		n.t.Fatalf("auth codes visible during SendCode = %d, want 1", codes)
+	}
+	if _, err := n.db.Exec(`UPDATE users SET updated_at = updated_at WHERE user_id = ?`, n.userID); err != nil {
+		n.t.Fatalf("write during SendCode failed; signup transaction may still be open: %v", err)
+	}
 	if n.codes == nil {
 		n.codes = map[string]string{}
 	}
@@ -107,6 +153,254 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 	}
 	if resume != "resume text" || !strings.Contains(titles, "Staff Engineer") {
 		t.Fatalf("profile not saved: resume=%q titles=%q", resume, titles)
+	}
+}
+
+func TestSignupDisabledBlocksSignup(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`UPDATE site_config SET signups_disabled = 1 WHERE config_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"closed@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("signup status = %d, want %d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Signups are currently disabled") {
+		t.Fatalf("signup body missing disabled message: %s", rec.Body.String())
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'closed@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 0 {
+		t.Fatalf("users created = %d, want 0", users)
+	}
+	if notifier.codes["closed@example.com"] != "" {
+		t.Fatal("signup sent verification code while disabled")
+	}
+}
+
+func TestSignupRefusesTombstonedEmail(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "gone@example.com", schema.UserStatusTombstoned); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"gone@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("signup status = %d, want %d body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Email is not available for signup") {
+		t.Fatalf("signup body missing generic refusal: %s", rec.Body.String())
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'gone@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with tombstoned email = %d, want 1", users)
+	}
+	if notifier.codes["gone@example.com"] != "" {
+		t.Fatal("signup sent verification code for tombstoned email")
+	}
+}
+
+func TestSignupStillHandlesSuspendedEmailWithExistingUpsert(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "suspended@example.com", schema.UserStatusSuspended); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getCSRF(t, h, "/signup")
+	rec := postForm(t, h, "/signup", url.Values{"email": {"suspended@example.com"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/verify?email=suspended%40example.com" {
+		t.Fatalf("signup status=%d location=%q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	if notifier.codes["suspended@example.com"] == "" {
+		t.Fatal("signup did not send verification code for suspended email")
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'suspended@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with suspended email = %d, want 1", users)
+	}
+}
+
+func TestSignupTransactionRechecksTombstoneAfterEarlierLiveObservation(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	uid := insertLiveUser(t, s.DB, "race@example.com")
+
+	var earlierStatus string
+	if err := s.DB.QueryRow(`SELECT status FROM users WHERE email = 'race@example.com'`).Scan(&earlierStatus); err != nil {
+		t.Fatal(err)
+	}
+	if earlierStatus != string(schema.UserStatusLive) {
+		t.Fatalf("earlier status = %q, want live", earlierStatus)
+	}
+	if _, err := s.DB.Exec(`UPDATE users SET status = ? WHERE user_id = ?`, schema.UserStatusTombstoned, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.createSignupAndIssueCode(context.Background(), "race@example.com", sql.NullString{}, "127.0.0.1", nil)
+	if !errors.Is(err, errEmailNotAvailable) {
+		t.Fatalf("createSignupAndIssueCode error = %v, want errEmailNotAvailable", err)
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'race@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 {
+		t.Fatalf("users with raced email = %d, want 1", users)
+	}
+	if notifier.codes["race@example.com"] != "" {
+		t.Fatal("signup sent verification code after tombstone")
+	}
+}
+
+func TestSignupImmediateTransactionBlocksConcurrentTombstone(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "signup-race.db")
+	conn, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWebStorage(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`PRAGMA busy_timeout = 1`); err != nil {
+		t.Fatal(err)
+	}
+	adminConn, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { adminConn.Close() })
+	if _, err := adminConn.Exec(`PRAGMA busy_timeout = 1`); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &captureNotifier{}
+	s := &Server{DB: conn, Notifier: notifier, MatchRunner: &captureRunner{}, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+	uid := insertLiveUser(t, conn, "locked@example.com")
+
+	var tombstoneErr error
+	err = s.createSignupAndIssueCode(context.Background(), "locked@example.com", sql.NullString{}, "127.0.0.1", func(ctx context.Context) error {
+		tombstoneErr = admin.Store{DB: adminConn}.TombstoneUser(ctx, uid, "ops@example.com")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("createSignupAndIssueCode: %v", err)
+	}
+	if tombstoneErr == nil {
+		t.Fatal("concurrent tombstone succeeded while signup BEGIN IMMEDIATE transaction was open")
+	}
+	var status string
+	if err := conn.QueryRow(`SELECT status FROM users WHERE user_id = ?`, uid).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(schema.UserStatusLive) {
+		t.Fatalf("status after blocked tombstone = %q, want live", status)
+	}
+	if notifier.codes["locked@example.com"] == "" {
+		t.Fatal("signup did not send verification code")
+	}
+}
+
+func TestSignupSendsCodeAfterCommit(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "signup-send-after-commit.db")
+	conn, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if err := db.EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWebStorage(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	uid := insertLiveUser(t, conn, "after-commit@example.com")
+	notifier := &commitAwareNotifier{t: t, db: conn, userID: uid}
+	s := &Server{DB: conn, Notifier: notifier, MatchRunner: &captureRunner{}, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+
+	if err := s.createSignupAndIssueCode(context.Background(), "after-commit@example.com", sql.NullString{}, "127.0.0.1", nil); err != nil {
+		t.Fatalf("createSignupAndIssueCode: %v", err)
+	}
+	if !notifier.checked {
+		t.Fatal("notifier was not called")
+	}
+	if notifier.codes["after-commit@example.com"] == "" {
+		t.Fatal("notifier did not capture code")
+	}
+}
+
+func TestSignupSendFailureAfterCommitKeepsRows(t *testing.T) {
+	notifier := &failingNotifier{err: errors.New("smtp down")}
+	s := newTestServer(t)
+	s.Notifier = notifier
+
+	err := s.createSignupAndIssueCode(context.Background(), "durable@example.com", sql.NullString{}, "127.0.0.1", nil)
+	if !errors.Is(err, errCodeDelivery) {
+		t.Fatalf("createSignupAndIssueCode error = %v, want errCodeDelivery", err)
+	}
+	if notifier.codes["durable@example.com"] == "" {
+		t.Fatal("notifier was not called")
+	}
+	var userID int64
+	if err := s.DB.QueryRow(`SELECT user_id FROM users WHERE email = ? AND status = ?`, "durable@example.com", schema.UserStatusPending).Scan(&userID); err != nil {
+		t.Fatalf("committed user missing after send failure: %v", err)
+	}
+	var codes, history int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM web_auth_codes WHERE user_id = ?`, userID).Scan(&codes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow(`SELECT count(*) FROM user_history WHERE user_id = ? AND event_type = 'auth_code_issued'`, userID).Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if codes != 1 || history != 1 {
+		t.Fatalf("durable rows after send failure: codes=%d history=%d, want 1/1", codes, history)
+	}
+}
+
+func TestSignupDoesNotSendCodeWhenTransactionFailsBeforeCommit(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	if _, err := s.DB.Exec(`UPDATE site_config SET signups_disabled = 1 WHERE config_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.createSignupAndIssueCode(context.Background(), "nosend@example.com", sql.NullString{}, "127.0.0.1", nil)
+	if !errors.Is(err, errSignupsDisabled) {
+		t.Fatalf("createSignupAndIssueCode error = %v, want errSignupsDisabled", err)
+	}
+	if notifier.codes["nosend@example.com"] != "" {
+		t.Fatal("notifier sent code on pre-commit refusal")
+	}
+	var users int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM users WHERE email = 'nosend@example.com'`).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if users != 0 {
+		t.Fatalf("users created = %d, want 0", users)
 	}
 }
 
