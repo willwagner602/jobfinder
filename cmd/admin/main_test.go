@@ -103,8 +103,8 @@ func TestRunAppliesSchemaAndServesRoutes(t *testing.T) {
 	if err := conn.QueryRow(`SELECT coalesce(max(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2 after run() startup", version)
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3 after run() startup", version)
 	}
 	var tokenCount int
 	if err := conn.QueryRow(`SELECT count(*) FROM admin_tokens`).Scan(&tokenCount); err != nil {
