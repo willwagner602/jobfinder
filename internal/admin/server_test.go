@@ -100,7 +100,7 @@ func TestNewAdminRoutesRequireTokenIncludingWrongMethodBlockers(t *testing.T) {
 		{http.MethodGet, "/admin/users/untombstone", ""},
 		{http.MethodPost, "/admin/users/tombstone", "user_id=" + strconv.FormatInt(id, 10)},
 		{http.MethodPost, "/admin/users/untombstone", "user_id=" + strconv.FormatInt(id, 10)},
-		{http.MethodPost, "/admin/signups", "signups_disabled=true"},
+		{http.MethodPost, "/admin/config/signups", "disabled=true"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		if tc.method == http.MethodPost {
@@ -243,7 +243,7 @@ func TestUserManagementPageIncludesNewControlsAndAdaptiveSidebar(t *testing.T) {
 	for _, want := range []string{
 		"href=\"/admin/users/" + strconv.FormatInt(id, 10) + "\"",
 		"/admin/users/tombstone",
-		"/admin/signups",
+		"/admin/config/signups",
 		"Dark mode",
 		"☰ Menu",
 		"href=\"/admin/tokens\"",
@@ -290,8 +290,11 @@ func TestSignupToggleRouteUpdatesSiteConfig(t *testing.T) {
 	store := newTestStore(t)
 	handler := NewServer(store.DB, "secret", nil).Routes()
 
-	res := postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"true"}})
+	res := postForm(t, handler, "/admin/config/signups", url.Values{"disabled": {"true"}})
 	assertStatus(t, res, http.StatusSeeOther)
+	if got := res.Header().Get("Location"); got != "/admin" {
+		t.Fatalf("signup config redirect target = %q", got)
+	}
 	disabled, err := store.IsSignupDisabled(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -300,8 +303,11 @@ func TestSignupToggleRouteUpdatesSiteConfig(t *testing.T) {
 		t.Fatal("signups should be disabled")
 	}
 
-	res = postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"false"}})
+	res = postForm(t, handler, "/admin/config/signups", url.Values{"disabled": {"false"}})
 	assertStatus(t, res, http.StatusSeeOther)
+	if got := res.Header().Get("Location"); got != "/admin" {
+		t.Fatalf("signup config redirect target = %q", got)
+	}
 	disabled, err = store.IsSignupDisabled(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +418,7 @@ func TestTombstoneRoutesValidateInputAndUnknownIDs(t *testing.T) {
 func TestSignupToggleRejectsUnparseableBodyAndReportsStoreErrors(t *testing.T) {
 	store := newTestStore(t)
 	handler := NewServer(store.DB, "secret", nil).Routes()
-	badBody := httptest.NewRequest(http.MethodPost, "/admin/signups", strings.NewReader("%zz"))
+	badBody := httptest.NewRequest(http.MethodPost, "/admin/config/signups", strings.NewReader("%zz"))
 	badBody.Header.Set("Authorization", "Bearer secret")
 	badBody.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	badBodyRes := httptest.NewRecorder()
@@ -422,7 +428,7 @@ func TestSignupToggleRejectsUnparseableBodyAndReportsStoreErrors(t *testing.T) {
 	if _, err := store.DB.Exec(`DELETE FROM site_config WHERE config_id = 1`); err != nil {
 		t.Fatal(err)
 	}
-	missingRow := postForm(t, handler, "/admin/signups", url.Values{"signups_disabled": {"true"}})
+	missingRow := postForm(t, handler, "/admin/config/signups", url.Values{"disabled": {"true"}})
 	assertStatus(t, missingRow, http.StatusNotFound)
 }
 

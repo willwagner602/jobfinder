@@ -89,7 +89,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/users/suspend", s.requireAdmin(s.suspendUser))
 	mux.HandleFunc("POST /admin/users/tombstone", s.requireAdmin(s.tombstoneUser))
 	mux.HandleFunc("POST /admin/users/untombstone", s.requireAdmin(s.unTombstoneUser))
-	mux.HandleFunc("POST /admin/signups", s.requireAdmin(s.setSignupDisabled))
+	mux.HandleFunc("POST /admin/config/signups", s.requireAdmin(s.setSignupDisabled))
 	mux.HandleFunc("GET /admin/tokens", s.requireAdmin(s.tokens))
 	mux.HandleFunc("POST /admin/tokens/issue", s.requireAdmin(s.issueToken))
 	mux.HandleFunc("POST /admin/tokens/revoke", s.requireAdmin(s.revokeToken))
@@ -223,7 +223,7 @@ func (s *Server) setSignupDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	want := r.FormValue("signups_disabled") == "true"
+	want := r.FormValue("disabled") == "true"
 	if err := s.Store.SetSignupDisabled(r.Context(), want); err != nil {
 		status := http.StatusInternalServerError
 		if err == ErrNotFound {
@@ -232,11 +232,7 @@ func (s *Server) setSignupDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	to := r.Header.Get("Referer")
-	if to == "" {
-		to = "/admin"
-	}
-	http.Redirect(w, r, to, http.StatusSeeOther)
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
 func (s *Server) tokens(w http.ResponseWriter, r *http.Request) {
@@ -519,8 +515,8 @@ pre { white-space:pre-wrap; word-break:break-word; margin:0; }
 <div class="sidebar-card">
 <strong>Signup access</strong>
 {{if .SignupStatusErr}}<p>Unable to read signup status: {{.SignupStatusErr}}</p>{{else}}<p>New signups are currently <strong>{{if .SignupDisabled}}disabled{{else}}enabled{{end}}</strong>.</p>{{end}}
-<form method="post" action="/admin/signups">
-<input type="hidden" name="signups_disabled" value="{{if .SignupDisabled}}false{{else}}true{{end}}">
+<form method="post" action="/admin/config/signups">
+<input type="hidden" name="disabled" value="{{if .SignupDisabled}}false{{else}}true{{end}}">
 <button class="secondary">{{if .SignupDisabled}}Enable signups{{else}}Disable signups{{end}}</button>
 </form>
 </div>
