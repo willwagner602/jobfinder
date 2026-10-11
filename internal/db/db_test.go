@@ -18,7 +18,7 @@ func TestEnsureCurrentFreshDatabase(t *testing.T) {
 		t.Fatalf("EnsureCurrent: %v", err)
 	}
 	assertVersion(t, conn, schema.CurrentVersion)
-	for _, table := range []string{"users", "user_configs", "user_history", "job_boards", "job_listings", "job_listing_versions", "job_matches", "job_history"} {
+	for _, table := range []string{"users", "user_configs", "user_history", "job_boards", "job_listings", "job_listing_versions", "job_matches", "job_history", "site_config"} {
 		assertTableExists(t, conn, table)
 	}
 }
@@ -75,6 +75,95 @@ func TestEnsureCurrentUpgradesPreviousSchema(t *testing.T) {
 	}
 	if _, err := conn.Exec(`INSERT INTO job_listing_versions(job_listing_id, version, found_at, title, salary, body_text, content_hash) VALUES (1, 2, '2025-01-03T03:04:05Z', 'Engineer', '$100k', 'Build systems again', 'fixture-hash-a')`); err != nil {
 		t.Fatalf("upgraded schema still rejects repeated historical content hash: %v", err)
+	}
+}
+
+func TestSchemaV4SignupConfigAndTombstoneConstraints(t *testing.T) {
+	conn := openCurrentTestDB(t)
+	var disabled int
+	if err := conn.QueryRow(`SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled != 0 {
+		t.Fatalf("fresh signups_disabled = %d, want 0", disabled)
+	}
+	if _, err := conn.Exec(`INSERT INTO site_config(config_id, signups_disabled) VALUES (2, 0)`); err == nil {
+		t.Fatal("second site_config row succeeded")
+	}
+	if _, err := conn.Exec(`UPDATE site_config SET signups_disabled = 2 WHERE config_id = 1`); err == nil {
+		t.Fatal("invalid signups_disabled value succeeded")
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('gone@example.com', ?)`, schema.UserStatusTombstoned); err != nil {
+		t.Fatalf("tombstoned user status rejected: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('bad@example.com', 'deleted')`); err == nil {
+		t.Fatal("invalid user status succeeded")
+	}
+}
+
+func TestEnsureCurrentUpgradesSchemaV3ToV4PreservingUserRelatedRows(t *testing.T) {
+	conn := openTestDB(t)
+	fixture, err := os.ReadFile(filepath.Join("testdata", "schema_v1.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(string(fixture)); err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []int{2, 3} {
+		if err := applyMigration(ctx, tx, version); err != nil {
+			t.Fatalf("apply schema migration %d: %v", version, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
+	assertVersion(t, conn, 3)
+	if _, err := conn.Exec(`INSERT INTO user_configs(user_id, resume_text) VALUES (1, 'resume')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO user_history(user_id, event_type) VALUES (1, 'fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureCurrent(context.Background(), conn); err != nil {
+		t.Fatalf("upgrade v3 to v4: %v", err)
+	}
+	assertVersion(t, conn, schema.CurrentVersion)
+	assertNoForeignKeyViolations(t, conn)
+	for table, query := range map[string]string{
+		"users":        `SELECT count(*) FROM users WHERE user_id = 1 AND email = 'worker@example.com' AND status = 'live'`,
+		"user_configs": `SELECT count(*) FROM user_configs WHERE user_id = 1 AND resume_text = 'resume'`,
+		"user_history": `SELECT count(*) FROM user_history WHERE user_id = 1 AND event_type = 'fixture'`,
+		"job_matches":  `SELECT count(*) FROM job_matches WHERE user_id = 1 AND job_listing_id = 1`,
+	} {
+		var rows int
+		if err := conn.QueryRow(query).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 {
+			t.Fatalf("%s rows preserved = %d, want 1", table, rows)
+		}
+	}
+	if _, err := conn.Exec(`INSERT INTO users(email, status) VALUES ('gone-v3@example.com', ?)`, schema.UserStatusTombstoned); err != nil {
+		t.Fatalf("upgraded v3 schema rejected tombstoned status: %v", err)
+	}
+	var disabled int
+	if err := conn.QueryRow(`SELECT signups_disabled FROM site_config WHERE config_id = 1`).Scan(&disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled != 0 {
+		t.Fatalf("upgraded signups_disabled = %d, want 0", disabled)
 	}
 }
 
