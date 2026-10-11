@@ -217,6 +217,10 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "signup.html", pageData{Title: "Sign up", Error: "Email is not available for signup", CSRF: s.csrf(w, r)})
 		return
 	}
+	if errors.Is(err, errCodeDelivery) {
+		http.Error(w, "verification code failed", http.StatusInternalServerError)
+		return
+	}
 	if err != nil {
 		http.Error(w, "signup failed", http.StatusInternalServerError)
 		return
@@ -227,6 +231,7 @@ func (s *Server) signupPost(w http.ResponseWriter, r *http.Request) {
 var (
 	errSignupsDisabled   = errors.New("signups disabled")
 	errEmailNotAvailable = errors.New("email not available for signup")
+	errCodeDelivery      = errors.New("verification code delivery failed")
 )
 
 func (s *Server) createSignupAndIssueCode(ctx context.Context, email string, hash sql.NullString, ip string, afterBegin func(context.Context) error) error {
@@ -267,13 +272,20 @@ func (s *Server) createSignupAndIssueCode(ctx context.Context, email string, has
 	if _, err = conn.ExecContext(ctx, `INSERT INTO users(email, password_hash, status) VALUES (?, ?, ?) ON CONFLICT(email) WHERE status <> 'tombstoned' DO UPDATE SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, email, nullable(hash), schema.UserStatusPending); err != nil {
 		return err
 	}
-	if err := s.issueCodeOnConn(ctx, conn, email, "signup", ip); err != nil {
+	code, err := s.storeCodeOnConn(ctx, conn, email, "signup", ip)
+	if err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return err
 	}
 	committed = true
+	// The signup/code rows are now durable. If external delivery fails, surface
+	// the error without attempting rollback; the committed code will expire by
+	// the normal auth-code expiry path.
+	if err := s.Notifier.SendCode(ctx, email, code); err != nil {
+		return fmt.Errorf("%w: %v", errCodeDelivery, err)
+	}
 	return nil
 }
 
@@ -281,26 +293,37 @@ func (s *Server) issueCodeOnConn(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, email, purpose, ip string) error {
+	code, err := s.storeCodeOnConn(ctx, q, email, purpose, ip)
+	if err != nil {
+		return err
+	}
+	return s.Notifier.SendCode(ctx, email, code)
+}
+
+func (s *Server) storeCodeOnConn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, email, purpose, ip string) (string, error) {
 	var userID int64
 	if err := q.QueryRowContext(ctx, `SELECT user_id FROM users WHERE email = ?`, email).Scan(&userID); err != nil {
-		return err
+		return "", err
 	}
 	code, err := numericCode()
 	if err != nil {
-		return err
+		return "", err
 	}
 	sum := sha256.Sum256([]byte(code))
 	expires := s.Now().UTC().Add(codeTTL)
 	res, err := q.ExecContext(ctx, `INSERT INTO web_auth_codes(user_id, purpose, code_hash, expires_at) VALUES (?, ?, ?, ?)`, userID, purpose, hex.EncodeToString(sum[:]), expires.Format(time.RFC3339Nano))
 	if err != nil {
-		return err
+		return "", err
 	}
 	codeID, _ := res.LastInsertId()
 	data := map[string]any{"purpose": purpose, "code_id": codeID, "expires_at": expires.Format(time.RFC3339Nano)}
 	if _, err := q.ExecContext(ctx, `INSERT INTO user_history(user_id, event_type, inbound_ip, data_json) VALUES (?, ?, ?, ?)`, userID, "auth_code_issued", nullString(ip), mustJSON(data)); err != nil {
-		return err
+		return "", err
 	}
-	return s.Notifier.SendCode(ctx, email, code)
+	return code, nil
 }
 
 func (s *Server) verifyForm(w http.ResponseWriter, r *http.Request) {
