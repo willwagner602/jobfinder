@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -83,9 +84,17 @@ func TestSessionKeyValidation(t *testing.T) {
 
 func TestRunAppliesSchemaAndServesRoutes(t *testing.T) {
 	addr := freePort(t)
+	assetDir := filepath.Join(t.TempDir(), "static")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "index.html"), []byte(`<!doctype html><div id="app">configured-spa</div>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("WEB_ADDR", addr)
 	t.Setenv("JOBS_DB", filepath.Join(t.TempDir(), "jobs.sqlite3"))
 	t.Setenv("TEMPLATE_DIR", "../../templates")
+	t.Setenv("SPA_ASSET_DIR", assetDir)
 	t.Setenv("SESSION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("JOBS_SMTP_ADDR", "127.0.0.1:2525")
 	t.Setenv("JOBS_SMTP_USERNAME", "tester")
@@ -114,6 +123,21 @@ func TestRunAppliesSchemaAndServesRoutes(t *testing.T) {
 	}
 	if version < 2 {
 		t.Fatalf("schema version = %d, want >= 2 after run() startup", version)
+	}
+	res, err := http.Get(fmt.Sprintf("http://%s/login", addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("/login status = %d, want 200", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "configured-spa") {
+		t.Fatalf("/login body = %q, want configured SPA", string(body))
 	}
 }
 
