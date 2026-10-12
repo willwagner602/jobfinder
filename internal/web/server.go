@@ -211,6 +211,7 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	s.csrf(w, r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.Copy(w, f); err != nil {
 		http.Error(w, "failed to serve application", http.StatusInternalServerError)

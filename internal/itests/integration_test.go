@@ -173,7 +173,18 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness { return newHarnessWithDBSetup(t, nil) }
 
+// newHarnessWithDBSetup builds the harness with the SPA asset dir pointed at a
+// path that contains no index.html so the legacy Go-template handlers serve the
+// form flows these tests exercise, independent of whether frontend/dist has
+// been built.
 func newHarnessWithDBSetup(t *testing.T, setup func(*testing.T, *sql.DB)) *harness {
+	t.Helper()
+	return newHarnessWithSPAAssets(t, setup, "")
+}
+
+// newHarnessWithSPAAssets builds the harness with an explicit SPA_ASSET_DIR for
+// the web binary; an empty spaDir selects a directory without index.html.
+func newHarnessWithSPAAssets(t *testing.T, setup func(*testing.T, *sql.DB), spaDir string) *harness {
 	t.Helper()
 	webBin, adminBin := buildBinaries(t)
 	dir := t.TempDir()
@@ -201,6 +212,7 @@ func newHarnessWithDBSetup(t *testing.T, setup func(*testing.T, *sql.DB)) *harne
 		"JOBS_DB=" + dbPath,
 		"WEB_ADDR=" + webAddr,
 		"TEMPLATE_DIR=" + filepath.Join(repoRoot(t), "templates"),
+		"SPA_ASSET_DIR=" + spaAssetDir(t, spaDir),
 		"SESSION_KEY=0123456789abcdef0123456789abcdef",
 		"JOBS_SMTP_ADDR=" + smtp.addr,
 		"JOBS_SMTP_USERNAME=user",
@@ -312,6 +324,53 @@ func buildBinaries(t *testing.T) (string, string) {
 		t.Fatal(built.err)
 	}
 	return built.web, built.admin
+}
+
+// spaAssetDir returns the explicit SPA asset directory for the harness web
+// binary. Without an explicit dir it selects a newly created directory that
+// has no index.html, so the legacy handlers serve the form routes regardless
+// of whether frontend/dist has been built in the working tree.
+func spaAssetDir(t *testing.T, spaDir string) string {
+	t.Helper()
+	if spaDir != "" {
+		return spaDir
+	}
+	empty := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(empty, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return empty
+}
+
+// TestSPAServingFromConfiguredAssetDir covers the real binary serving the
+// built Vue SPA entry from SPA_ASSET_DIR, including a deep-link refresh.
+func TestSPAServingFromConfiguredAssetDir(t *testing.T) {
+	t.Parallel()
+	spaDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(spaDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(spaDir, "index.html")
+	spaHTML := "<!doctype html><html><head><title>Jobs</title></head><body><div id=\"app\"></div><script type=\"module\" src=\"/assets/test.js\"></script></body></html>"
+	if err := os.WriteFile(index, []byte(spaHTML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spaDir, "assets", "test.js"), []byte("// test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newHarnessWithSPAAssets(t, nil, spaDir)
+	defer h.Close()
+
+	for _, path := range []string{"/", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
+		client := newClient(t)
+		res := get(t, client, h.webURL(path))
+		assertStatus(t, res, http.StatusOK)
+		assertBodyContains(t, res, "id=\"app\"")
+	}
+
+	res := getNoRedirect(t, newClient(t), h.webURL("/unknown-spa-path"))
+	assertStatus(t, res, http.StatusNotFound)
 }
 
 func repoRoot(t *testing.T) string {
