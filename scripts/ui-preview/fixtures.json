@@ -1,0 +1,45 @@
+{
+  "users": [
+    {
+      "email": "preview.user@example.test",
+      "verificationCode": "123456",
+      "loginCode": "654321"
+    }
+  ],
+  "profile": {
+    "resumeText": "Staff engineer with Vue, Go, and platform experience.",
+    "experienceText": "Led API migrations\nImproved job matching reliability",
+    "desiredTitles": "Staff Platform Engineer\nPrincipal Software Engineer",
+    "searchPreferences": "Remote-first teams, product infrastructure, TypeScript and Go",
+    "blockedCompanies": "Example BadCo",
+    "matcherName": "default",
+    "lastMatchRunMessage": "Saved; prior-week match run requested."
+  },
+  "jobs": [
+    {
+      "matchId": 101,
+      "listingId": 501,
+      "version": 1,
+      "title": "Staff Platform Engineer",
+      "company": "Northwind Labs",
+      "canonicalUrl": "https://example.test/jobs/101",
+      "rating": 5,
+      "decision": "match",
+      "createdAt": "2025-01-02T00:00:00Z",
+      "summary": "Build reliable internal platforms for product engineering teams."
+    },
+    {
+      "matchId": 102,
+      "listingId": 502,
+      "version": 1,
+      "title": "Vue Application Engineer",
+      "company": "Contoso Careers",
+      "canonicalUrl": "https://example.test/jobs/102",
+      "rating": 4,
+      "decision": "possible",
+      "createdAt": "2025-01-03T00:00:00Z",
+      "summary": "Own accessible Vue interfaces for candidate workflows."
+    }
+  ],
+  "productionGuard": "These synthetic fixtures are loaded only by scripts under scripts/ui-preview and are not imported by production frontend or Go code."
+}
