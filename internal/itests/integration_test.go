@@ -362,7 +362,7 @@ func TestSPAServingFromConfiguredAssetDir(t *testing.T) {
 	h := newHarnessWithSPAAssets(t, nil, spaDir)
 	defer h.Close()
 
-	for _, path := range []string{"/", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
+	for _, path := range []string{"/", "/dashboard", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
 		client := newClient(t)
 		res := get(t, client, h.webURL(path))
 		assertStatus(t, res, http.StatusOK)

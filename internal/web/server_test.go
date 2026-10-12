@@ -91,7 +91,7 @@ func (r *captureRunner) RunPriorWeek(_ context.Context, userID int64, start, end
 func TestSPARoutesServeIndex(t *testing.T) {
 	s := newTestServer(t)
 	h := s.Routes()
-	for _, path := range []string{"/", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
+	for _, path := range []string{"/", "/dashboard", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		h.ServeHTTP(rec, req)
@@ -122,6 +122,7 @@ func TestLegacyUserRoutesOnlyWhenSPAIndexMissing(t *testing.T) {
 		{"/signup", "<form>"},
 		{"/verify", "<form>"},
 		{"/login", "<form>"},
+		{"/dashboard", "legacy@example.com"},
 		{"/", "legacy@example.com"},
 		{"/onboarding", "onboarding"},
 		{"/jobs", "Platform Engineer"},

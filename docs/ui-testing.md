@@ -62,7 +62,8 @@ The screenshot matrix is stored in `scripts/ui-preview/screenshot-matrix.json`. 
 | Sign up | `/signup` | normal, validation-error, server-error |
 | Verify email | `/verify?email=preview.user@example.test` | normal, validation-error, server-error |
 | Log in | `/login` | normal, validation-error, server-error |
-| Dashboard | `/` | populated, empty, loading, request-failure |
+| Landing | `/` | normal |
+| Dashboard | `/dashboard` | populated, empty, loading, request-failure |
 | Profile and onboarding | `/onboarding` | populated, validation-error, request-failure |
 | Job matches list | `/jobs` | populated, empty, loading, request-failure |
 | Job-match detail | `/jobs/101` | found, no-summary, request-failure |
