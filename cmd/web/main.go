@@ -17,6 +17,7 @@ func run() error {
 	dbPath := env("JOBS_DB", "jobs.db")
 	addr := env("WEB_ADDR", ":8080")
 	templateDir := env("TEMPLATE_DIR", "templates")
+	assetDir := env("SPA_ASSET_DIR", "frontend/dist")
 	key, err := sessionKey()
 	if err != nil {
 		return err
@@ -30,7 +31,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	srv, err := web.New(dbPath, templateDir, key, notifier, web.NoopMatchRunner{})
+	srv, err := web.NewWithAssets(dbPath, templateDir, assetDir, key, notifier, web.NoopMatchRunner{})
 	if err != nil {
 		return err
 	}

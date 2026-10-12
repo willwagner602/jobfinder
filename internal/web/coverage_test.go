@@ -222,8 +222,7 @@ func TestRenderTemplateFailureReturnsServerError(t *testing.T) {
 	s.Templates = template.Must(template.New("home.html").Parse(`{{template "header" .}}`))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(sessionCookieFor(t, s, insertLiveUser(t, s.DB, "tpl@example.com")))
-	s.Routes().ServeHTTP(rec, req)
+	s.render(rec, req, "home.html", pageData{})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("broken template status = %d, want 500 (body=%s)", rec.Code, rec.Body.String())
 	}
@@ -391,10 +390,7 @@ func TestOnboardingRequiresResumeOrExperience(t *testing.T) {
 func TestJobDetailRejectsInvalidID(t *testing.T) {
 	s := newTestServer(t)
 	uid := insertLiveUser(t, s.DB, "detail@example.com")
-	req := httptest.NewRequest("GET", "/jobs/notanumber", nil)
-	req.AddCookie(sessionCookieFor(t, s, uid))
-	rec := httptest.NewRecorder()
-	s.Routes().ServeHTTP(rec, req)
+	rec := getJSON(t, s.Routes(), "/api/jobs/notanumber", []*http.Cookie{sessionCookieFor(t, s, uid)})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("bad job id status = %d, want 404", rec.Code)
 	}
