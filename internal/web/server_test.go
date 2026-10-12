@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +155,77 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 	}
 	if resume != "resume text" || !strings.Contains(titles, "Staff Engineer") {
 		t.Fatalf("profile not saved: resume=%q titles=%q", resume, titles)
+	}
+}
+
+func TestJSONAPISignupVerifyLoginProfileAndJobs(t *testing.T) {
+	notifier := &captureNotifier{}
+	runner := &captureRunner{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	s.MatchRunner = runner
+	h := s.Routes()
+
+	csrf, cookies := getAPICSRF(t, h, nil)
+	rec := postJSON(t, h, "/api/signup", map[string]string{"email": "API@Example.COM", "password": "correct horse battery staple"}, csrf, cookies)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("api signup status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if notifier.codes["api@example.com"] == "" {
+		t.Fatal("api signup did not send verification code")
+	}
+
+	csrf, _ = getAPICSRF(t, h, cookies)
+	verifyRec := postJSON(t, h, "/api/verify", map[string]string{"email": "api@example.com", "code": notifier.codes["api@example.com"]}, csrf, cookies)
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("api verify status=%d body=%s", verifyRec.Code, verifyRec.Body.String())
+	}
+	cookies = append(cookies, verifyRec.Result().Cookies()...)
+
+	csrf, _ = getAPICSRF(t, h, cookies)
+	profileRec := putJSON(t, h, "/api/profile", map[string]string{"resumeText": "resume text", "experienceText": "bullet one", "desiredTitles": "Engineer\nStaff Engineer", "searchPreferences": "remote only", "blockedCompanies": "BadCo"}, csrf, cookies)
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("api profile update status=%d body=%s", profileRec.Code, profileRec.Body.String())
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want 1", runner.calls)
+	}
+	matchID := insertMatch(t, s.DB, runner.userID)
+
+	jobsRec := getJSON(t, h, "/api/jobs", cookies)
+	if jobsRec.Code != http.StatusOK || !strings.Contains(jobsRec.Body.String(), "Platform Engineer") {
+		t.Fatalf("api jobs status=%d body=%s", jobsRec.Code, jobsRec.Body.String())
+	}
+	detailRec := getJSON(t, h, "/api/jobs/"+strconvI64(matchID), cookies)
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "Platform Engineer") {
+		t.Fatalf("api job detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+}
+
+func TestJSONAPIAuthCSRFFailuresAndClientIdentity(t *testing.T) {
+	s := newTestServer(t)
+	h := s.Routes()
+	uid1 := insertLiveUser(t, s.DB, "owner@example.com")
+	uid2 := insertLiveUser(t, s.DB, "other@example.com")
+	matchID := insertMatch(t, s.DB, uid1)
+	ownerSession := []*http.Cookie{sessionCookieFor(t, s, uid1)}
+	otherSession := []*http.Cookie{sessionCookieFor(t, s, uid2)}
+
+	unauth := getJSON(t, h, "/api/profile", nil)
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth profile status=%d body=%s", unauth.Code, unauth.Body.String())
+	}
+
+	csrf, cookies := getAPICSRF(t, h, ownerSession)
+	badCSRF := putJSON(t, h, "/api/profile", map[string]string{"resumeText": "resume"}, "wrong-token", append(cookies, ownerSession...))
+	if badCSRF.Code != http.StatusForbidden {
+		t.Fatalf("bad csrf profile status=%d body=%s", badCSRF.Code, badCSRF.Body.String())
+	}
+
+	_ = csrf
+	otherDetail := getJSON(t, h, "/api/jobs/"+strconvI64(matchID), otherSession)
+	if otherDetail.Code != http.StatusNotFound {
+		t.Fatalf("other user detail status=%d body=%s", otherDetail.Code, otherDetail.Body.String())
 	}
 }
 
@@ -558,6 +631,64 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	return &Server{DB: conn, Notifier: &captureNotifier{}, MatchRunner: &captureRunner{}, Templates: tpl, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+}
+
+func getAPICSRF(t *testing.T, h http.Handler, in []*http.Cookie) (string, []*http.Cookie) {
+	t.Helper()
+	rec := getJSON(t, h, "/api/session", in)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("api session status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.CSRFToken == "" {
+		t.Fatal("empty api csrf token")
+	}
+	return body.CSRFToken, rec.Result().Cookies()
+}
+
+func getJSON(t *testing.T, h http.Handler, path string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func postJSON(t *testing.T, h http.Handler, path string, body any, csrf string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	return requestJSON(t, h, http.MethodPost, path, body, csrf, cookies)
+}
+
+func putJSON(t *testing.T, h http.Handler, path string, body any, csrf string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	return requestJSON(t, h, http.MethodPut, path, body, csrf, cookies)
+}
+
+func requestJSON(t *testing.T, h http.Handler, method, path string, body any, csrf string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(method, path, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	h.ServeHTTP(rec, req)
+	return rec
 }
 
 func getCSRF(t *testing.T, h http.Handler, path string) (string, []*http.Cookie) {

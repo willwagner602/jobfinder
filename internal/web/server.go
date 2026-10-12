@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"math/big"
 	"net"
@@ -83,26 +84,26 @@ type pageData struct {
 }
 
 type profileData struct {
-	Resume              string
-	Experience          string
-	DesiredTitles       string
-	SearchPreferences   string
-	BlockedCompanies    string
-	MatcherName         string
-	LastMatchRunMessage string
+	Resume              string `json:"resumeText"`
+	Experience          string `json:"experienceText"`
+	DesiredTitles       string `json:"desiredTitles"`
+	SearchPreferences   string `json:"searchPreferences"`
+	BlockedCompanies    string `json:"blockedCompanies"`
+	MatcherName         string `json:"matcherName"`
+	LastMatchRunMessage string `json:"lastMatchRunMessage,omitempty"`
 }
 
 type jobDigest struct {
-	MatchID      int64
-	ListingID    int64
-	Version      int
-	Title        string
-	Company      string
-	CanonicalURL string
-	Rating       sql.NullInt64
-	Decision     string
-	CreatedAt    string
-	Summary      string
+	MatchID      int64         `json:"matchId"`
+	ListingID    int64         `json:"listingId"`
+	Version      int           `json:"version"`
+	Title        string        `json:"title"`
+	Company      string        `json:"company"`
+	CanonicalURL string        `json:"canonicalUrl"`
+	Rating       sql.NullInt64 `json:"rating"`
+	Decision     string        `json:"decision"`
+	CreatedAt    string        `json:"createdAt"`
+	Summary      string        `json:"summary"`
 }
 
 func New(databasePath, templateDir string, sessionKey []byte, notifier Notifier, runner MatchRunner) (*Server, error) {
@@ -157,6 +158,16 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	mux.HandleFunc("GET /api/session", s.apiSession)
+	mux.HandleFunc("POST /api/signup", s.apiSignup)
+	mux.HandleFunc("POST /api/verify", s.apiVerify)
+	mux.HandleFunc("POST /api/login", s.apiLogin)
+	mux.HandleFunc("POST /api/logout", s.requireAPIAuth(s.apiLogout))
+	mux.HandleFunc("GET /api/dashboard", s.requireAPIAuth(s.apiDashboard))
+	mux.HandleFunc("GET /api/profile", s.requireAPIAuth(s.apiProfile))
+	mux.HandleFunc("PUT /api/profile", s.requireAPIAuth(s.apiUpdateProfile))
+	mux.HandleFunc("GET /api/jobs", s.requireAPIAuth(s.apiJobsList))
+	mux.HandleFunc("GET /api/jobs/", s.requireAPIAuth(s.apiJobDetail))
 	mux.HandleFunc("GET /signup", s.signupForm)
 	mux.HandleFunc("POST /signup", s.signupPost)
 	mux.HandleFunc("GET /verify", s.verifyForm)
@@ -181,6 +192,276 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type apiUser struct {
+	Email string `json:"email"`
+}
+
+type apiSessionResponse struct {
+	Authenticated bool     `json:"authenticated"`
+	CSRFToken     string   `json:"csrfToken"`
+	User          *apiUser `json:"user,omitempty"`
+}
+
+type apiSignupRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type apiVerifyRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
+type apiLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Code     string `json:"code"`
+	SendCode bool   `json:"sendCode"`
+}
+
+type apiProfileRequest struct {
+	Resume            string `json:"resumeText"`
+	Experience        string `json:"experienceText"`
+	DesiredTitles     string `json:"desiredTitles"`
+	SearchPreferences string `json:"searchPreferences"`
+	BlockedCompanies  string `json:"blockedCompanies"`
+	MatcherName       string `json:"matcherName"`
+}
+
+type apiJobDigest struct {
+	MatchID      int64  `json:"matchId"`
+	ListingID    int64  `json:"listingId"`
+	Version      int    `json:"version"`
+	Title        string `json:"title"`
+	Company      string `json:"company"`
+	CanonicalURL string `json:"canonicalUrl"`
+	Rating       *int64 `json:"rating"`
+	Decision     string `json:"decision"`
+	CreatedAt    string `json:"createdAt"`
+	Summary      string `json:"summary"`
+}
+
+func apiJob(j jobDigest) apiJobDigest {
+	out := apiJobDigest{MatchID: j.MatchID, ListingID: j.ListingID, Version: j.Version, Title: j.Title, Company: j.Company, CanonicalURL: j.CanonicalURL, Decision: j.Decision, CreatedAt: j.CreatedAt, Summary: j.Summary}
+	if j.Rating.Valid {
+		out.Rating = &j.Rating.Int64
+	}
+	return out
+}
+
+func apiJobs(jobs []jobDigest) []apiJobDigest {
+	out := make([]apiJobDigest, 0, len(jobs))
+	for _, job := range jobs {
+		out = append(out, apiJob(job))
+	}
+	return out
+}
+
+func (s *Server) apiSession(w http.ResponseWriter, r *http.Request) {
+	resp := apiSessionResponse{Authenticated: false, CSRFToken: s.csrf(w, r)}
+	if u, ok := s.currentUser(r); ok && u.Status == string(schema.UserStatusLive) && u.EmailConfirmed.Valid {
+		resp.Authenticated = true
+		resp.User = &apiUser{Email: u.Email}
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) apiSignup(w http.ResponseWriter, r *http.Request) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	var req apiSignupRequest
+	if !s.readJSON(w, r, &req) {
+		return
+	}
+	email := normalizeEmail(req.Email)
+	if email == "" {
+		s.writeAPIError(w, http.StatusBadRequest, "email_required", "Email is required")
+		return
+	}
+	var hash sql.NullString
+	if req.Password != "" {
+		encoded, err := hashPassword(req.Password)
+		if err != nil {
+			s.writeAPIError(w, http.StatusInternalServerError, "password_setup_failed", "Password setup failed")
+			return
+		}
+		hash = sql.NullString{String: encoded, Valid: true}
+	}
+	err := s.createSignupAndIssueCode(r.Context(), email, hash, clientIP(r), nil)
+	if errors.Is(err, errSignupsDisabled) {
+		s.writeAPIError(w, http.StatusForbidden, "signups_disabled", "Signups are currently disabled")
+		return
+	}
+	if errors.Is(err, errEmailNotAvailable) {
+		s.writeAPIError(w, http.StatusForbidden, "email_not_available", "Email is not available for signup")
+		return
+	}
+	if errors.Is(err, errCodeDelivery) {
+		s.writeAPIError(w, http.StatusInternalServerError, "verification_code_failed", "Verification code failed")
+		return
+	}
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "signup_failed", "Signup failed")
+		return
+	}
+	s.writeJSON(w, http.StatusAccepted, map[string]string{"next": "verify", "email": email})
+}
+
+func (s *Server) apiVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	var req apiVerifyRequest
+	if !s.readJSON(w, r, &req) {
+		return
+	}
+	email := normalizeEmail(req.Email)
+	code := strings.TrimSpace(req.Code)
+	u, err := s.findUserByEmail(r.Context(), email)
+	if err != nil || !s.verifyCode(r.Context(), u.ID, code, "signup") {
+		s.writeAPIError(w, http.StatusBadRequest, "invalid_code", "Invalid or expired code")
+		return
+	}
+	_, err = s.DB.ExecContext(r.Context(), `UPDATE users SET email_confirmed_at = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE user_id = ?`, s.Now().UTC().Format(time.RFC3339Nano), schema.UserStatusLive, u.ID)
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "verification_failed", "Verification failed")
+		return
+	}
+	s.recordHistory(r.Context(), u.ID, "email_confirmed", clientIP(r), map[string]any{"purpose": "signup"})
+	s.setSession(w, u.ID)
+	s.writeJSON(w, http.StatusOK, map[string]any{"next": "onboarding", "user": apiUser{Email: u.Email}})
+}
+
+func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	var req apiLoginRequest
+	if !s.readJSON(w, r, &req) {
+		return
+	}
+	email := normalizeEmail(req.Email)
+	u, err := s.findUserByEmail(r.Context(), email)
+	if err != nil || u.Status != string(schema.UserStatusLive) || !u.EmailConfirmed.Valid {
+		s.writeAPIError(w, http.StatusForbidden, "account_not_ready", "Account is not ready for login")
+		return
+	}
+	if req.SendCode {
+		if err := s.issueCode(r.Context(), email, "login", clientIP(r)); err != nil {
+			s.writeAPIError(w, http.StatusInternalServerError, "code_failed", "Code failed")
+			return
+		}
+		s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "code_sent"})
+		return
+	}
+	if code := strings.TrimSpace(req.Code); code != "" {
+		if !s.verifyCode(r.Context(), u.ID, code, "login") {
+			s.writeAPIError(w, http.StatusBadRequest, "invalid_code", "Invalid or expired code")
+			return
+		}
+	} else if !u.PasswordHash.Valid || !verifyPassword(req.Password, u.PasswordHash.String) {
+		s.writeAPIError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid email or password")
+		return
+	}
+	s.recordHistory(r.Context(), u.ID, "login", clientIP(r), map[string]any{"method": "web"})
+	s.setSession(w, u.ID)
+	s.writeJSON(w, http.StatusOK, map[string]any{"next": "dashboard", "user": apiUser{Email: u.Email}})
+}
+
+func (s *Server) apiLogout(w http.ResponseWriter, r *http.Request, _ *user) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
+func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request, u *user) {
+	profile := s.profile(r.Context(), u.ID)
+	jobs, err := s.loadJobs(r.Context(), u.ID, 0)
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "jobs_failed", "Jobs failed")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"user": apiUser{Email: u.Email}, "profile": profile, "recentJobs": apiJobs(jobs)})
+}
+
+func (s *Server) apiProfile(w http.ResponseWriter, r *http.Request, u *user) {
+	s.writeJSON(w, http.StatusOK, map[string]any{"user": apiUser{Email: u.Email}, "profile": s.profile(r.Context(), u.ID)})
+}
+
+func (s *Server) apiUpdateProfile(w http.ResponseWriter, r *http.Request, u *user) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	var req apiProfileRequest
+	if !s.readJSON(w, r, &req) {
+		return
+	}
+	resume := strings.TrimSpace(req.Resume)
+	experience := strings.TrimSpace(req.Experience)
+	if resume == "" && experience == "" {
+		s.writeAPIError(w, http.StatusBadRequest, "profile_text_required", "Add a resume or experience bullets")
+		return
+	}
+	profile := &profileData{Resume: resume, Experience: experience, DesiredTitles: jsonList(req.DesiredTitles), SearchPreferences: jsonObjectFromText(req.SearchPreferences), BlockedCompanies: jsonList(req.BlockedCompanies), MatcherName: strings.TrimSpace(req.MatcherName)}
+	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, search_preferences_json, blocked_companies_json, matcher_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET resume_text=excluded.resume_text, experience_text=excluded.experience_text, desired_titles_json=excluded.desired_titles_json, search_preferences_json=excluded.search_preferences_json, blocked_companies_json=excluded.blocked_companies_json, matcher_name=excluded.matcher_name, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`, u.ID, resume, experience, profile.DesiredTitles, profile.SearchPreferences, profile.BlockedCompanies, nullString(profile.MatcherName))
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "profile_save_failed", "Profile save failed")
+		return
+	}
+	end := s.Now().UTC()
+	start := end.AddDate(0, 0, -7)
+	if err := s.MatchRunner.RunPriorWeek(r.Context(), u.ID, start, end); err != nil {
+		s.writeAPIError(w, http.StatusBadGateway, "match_kickoff_failed", "Match kickoff failed")
+		return
+	}
+	s.recordHistory(r.Context(), u.ID, "profile_saved", clientIP(r), map[string]any{"match_window_start": start.Format(time.RFC3339Nano), "match_window_end": end.Format(time.RFC3339Nano)})
+	profile.LastMatchRunMessage = "Saved; prior-week match run requested."
+	s.writeJSON(w, http.StatusOK, map[string]any{"profile": profile, "message": profile.LastMatchRunMessage})
+}
+
+func (s *Server) apiJobsList(w http.ResponseWriter, r *http.Request, u *user) {
+	jobs, err := s.loadJobs(r.Context(), u.ID, 0)
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "jobs_failed", "Jobs failed")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"jobs": apiJobs(jobs)})
+}
+
+func (s *Server) apiJobDetail(w http.ResponseWriter, r *http.Request, u *user) {
+	idText := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil {
+		s.writeAPIError(w, http.StatusNotFound, "job_not_found", "Job not found")
+		return
+	}
+	jobs, err := s.loadJobs(r.Context(), u.ID, id)
+	if err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "job_failed", "Job failed")
+		return
+	}
+	if len(jobs) == 0 {
+		s.writeAPIError(w, http.StatusNotFound, "job_not_found", "Job not found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"job": apiJob(jobs[0])})
+}
 
 func (s *Server) signupForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "signup.html", pageData{Title: "Sign up", CSRF: s.csrf(w, r)})
@@ -476,6 +757,17 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, *user
 	}
 }
 
+func (s *Server) requireAPIAuth(next func(http.ResponseWriter, *http.Request, *user)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, ok := s.currentUser(r)
+		if !ok || u.Status != string(schema.UserStatusLive) || !u.EmailConfirmed.Valid {
+			s.writeAPIError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+			return
+		}
+		next(w, r, u)
+	}
+}
+
 func (s *Server) currentUser(r *http.Request) (*user, bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -497,6 +789,30 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 	if err := s.Templates.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, "template failed", http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		s.writeAPIError(w, http.StatusBadRequest, "bad_json", "Request body must be valid JSON")
+		return false
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		s.writeAPIError(w, http.StatusBadRequest, "bad_json", "Request body must contain one JSON document")
+		return false
+	}
+	return true
+}
+
+func (s *Server) writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	s.writeJSON(w, status, map[string]apiError{"error": {Code: code, Message: message}})
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) findUserByEmail(ctx context.Context, email string) (*user, error) {
@@ -647,7 +963,14 @@ func (s *Server) csrf(w http.ResponseWriter, r *http.Request) string {
 
 func (s *Server) validCSRF(r *http.Request) bool {
 	c, err := r.Cookie(csrfCookieName)
-	return err == nil && c.Value != "" && subtle.ConstantTimeCompare([]byte(c.Value), []byte(r.FormValue("csrf"))) == 1
+	if err != nil || c.Value == "" {
+		return false
+	}
+	token := r.Header.Get("X-CSRF-Token")
+	if token == "" {
+		token = r.FormValue("csrf")
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1
 }
 
 func sign(key []byte, payload string) string {
