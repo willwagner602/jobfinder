@@ -5,9 +5,11 @@ This document covers the user-facing Vue UI checks added for the UI overhaul.
 ## Prerequisites
 
 - Node.js and npm compatible with the checked-in `frontend/package-lock.json`.
+- Chromium for Playwright. The scripts use Playwright's bundled browser when available, or a system Chromium from `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`, `CHROMIUM_PATH`, or `/snap/bin/chromium`.
 - No production database, SMTP service, credentials, or real verification codes are required.
-- The browser/component tests use deterministic in-process mock JSON API fixtures from `frontend/tests/ui-fixtures.ts`.
-- The screenshot generator uses synthetic local-only fixtures from `scripts/ui-preview/fixtures.json` and does not import production code or data.
+- Component tests use deterministic in-process mock JSON API fixtures from `frontend/tests/ui-fixtures.ts`.
+- Browser E2E tests and screenshot generation use deterministic route-level API fixtures from `scripts/ui-preview/fixtures.json` and `scripts/ui-preview/browser-fixtures.mjs`.
+- Fixture data is synthetic and local to test/screenshot tooling; it is not imported by production frontend or Go code.
 
 ## Commands
 
@@ -15,24 +17,28 @@ From the repository root:
 
 ```sh
 cd frontend
-npm install
+npm ci
 npm test
+npm run test:e2e
 npm run build
-cd ..
-node scripts/ui-preview/generate-screenshots.mjs
+npm run screenshots
 ```
 
-`npm test` runs Vitest in jsdom. The suite covers browser-level journeys through the app shell/router and component-level interactions for all controls listed in `docs/ui-component-inventory.md`.
+`npm test` runs Vitest in jsdom for component/control coverage and focused API/theme checks.
 
-`node scripts/ui-preview/generate-screenshots.mjs` writes generated artifacts under `artifacts/ui-screenshots/` and a `manifest.json`. Those generated files are local/CI artifacts, not production assets. Do not commit regenerated artifacts unless a reviewer explicitly asks for reference images.
+`npm run test:e2e` runs Playwright browser tests against a built Vite preview server. It exercises the actual Vue app in Chromium while intercepting `/api/**` with isolated deterministic responses; it does not contact production services.
+
+`npm run screenshots` builds if needed, serves the built Vue app from `frontend/dist`, drives Chromium with deterministic API fixtures, and writes PNG artifacts under `artifacts/ui-screenshots/` plus `manifest.json`. Generated screenshots are local/CI artifacts, not production assets. Do not commit regenerated artifacts unless a reviewer explicitly asks for reference images.
 
 ## Browser-level journeys covered
 
 - Signup submits email/password, navigates to verification, verifies the one-time code, refreshes session, and reaches onboarding.
 - Login submits credentials, reaches the dashboard, logs out, and returns to unauthenticated navigation.
+- Login code request renders the user-visible delivery status.
 - Profile/onboarding editing saves updated fields and shows the server success message.
 - Dashboard links navigate to job matches and a job-match detail page.
 - Theme switching persists a manual light/dark choice and can return to following the system preference.
+- Browser-visible validation and server failures are asserted for signup, verification, and login flows.
 
 ## Component/control coverage
 
@@ -68,8 +74,12 @@ The fixture data is intentionally synthetic: `preview.user@example.test`, repres
 CI integration is owned by the packaging task. The exact commands to wire into CI are:
 
 ```sh
-cd frontend && npm ci && npm test && npm run build
-node scripts/ui-preview/generate-screenshots.mjs
+cd frontend
+npm ci
+npm test
+npm run test:e2e
+npm run build
+npm run screenshots
 ```
 
-If CI must run a real browser screenshot tool later, add the browser automation dependency and package scripts in the packaging-owned scope; this task intentionally did not edit `frontend/package.json`.
+If CI uses a system browser instead of Playwright's installed browser, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` or `CHROMIUM_PATH` before running the commands.

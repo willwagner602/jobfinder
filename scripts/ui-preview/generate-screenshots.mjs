@@ -1,75 +1,178 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { createServer } from 'node:http';
+import { createReadStream, existsSync } from 'node:fs';
+import { extname, join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  apiFailures,
+  defaultJobs,
+  defaultProfile,
+  installMockApi,
+  makeBrowserApiState,
+  setThemeBeforeNavigation,
+} from './browser-fixtures.mjs';
 
-const here = dirname(fileURLToPath(import.meta.url));
+const here = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const projectRoot = resolve(here, '../..');
+const frontendRoot = resolve(projectRoot, 'frontend');
 const outputRoot = resolve(projectRoot, 'artifacts/ui-screenshots');
 const matrix = JSON.parse(await readFile(resolve(here, 'screenshot-matrix.json'), 'utf8'));
-const fixtures = JSON.parse(await readFile(resolve(here, 'fixtures.json'), 'utf8'));
 const themes = ['light', 'dark'];
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },
 ];
+const requestedPort = process.env.UI_SCREENSHOT_PORT ? Number(process.env.UI_SCREENSHOT_PORT) : 0;
+let baseURL = 'http://127.0.0.1:0';
+const { chromium } = await import(resolve(frontendRoot, 'node_modules/playwright/index.mjs'));
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+const mime = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.svg', 'image/svg+xml'],
+  ['.png', 'image/png'],
+  ['.ico', 'image/x-icon'],
+]);
+
+function chromiumExecutablePath() {
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  if (existsSync('/snap/bin/chromium')) return '/snap/bin/chromium';
+  return undefined;
 }
 
-function pageSummary(page, state) {
-  if (page.page === 'dashboard') return `${fixtures.users[0].email} with ${fixtures.jobs.length} representative matches`;
-  if (page.page === 'profile-onboarding') return fixtures.profile.resumeText;
-  if (page.page.startsWith('job')) return fixtures.jobs.map((job) => `${job.title} at ${job.company}`).join('; ');
-  if (state.includes('error')) return 'Synthetic validation or server error state';
-  return 'Synthetic local-only preview data';
+async function run(command, args, options = {}) {
+  await new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { stdio: 'inherit', ...options });
+    child.on('exit', (code) => code === 0 ? resolvePromise() : reject(new Error(`${command} ${args.join(' ')} exited with ${code}`)));
+    child.on('error', reject);
+  });
 }
 
-function svgFor({ page, state, theme, viewport }) {
-  const dark = theme === 'dark';
-  const bg = dark ? '#0f172a' : '#f8fafc';
-  const card = dark ? '#1e293b' : '#ffffff';
-  const fg = dark ? '#e2e8f0' : '#0f172a';
-  const muted = dark ? '#94a3b8' : '#475569';
-  const accent = dark ? '#38bdf8' : '#2563eb';
-  const summary = pageSummary(page, state);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}" viewBox="0 0 ${viewport.width} ${viewport.height}">
-  <rect width="100%" height="100%" fill="${bg}"/>
-  <rect x="32" y="32" width="${viewport.width - 64}" height="84" rx="18" fill="${card}" stroke="${accent}"/>
-  <text x="56" y="82" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700" fill="${fg}">jobs.willwagner.me</text>
-  <text x="56" y="104" font-family="Inter, Arial, sans-serif" font-size="14" fill="${muted}">${escapeHtml(theme)} theme · ${escapeHtml(viewport.name)} ${viewport.width}×${viewport.height}</text>
-  <rect x="32" y="150" width="${viewport.width - 64}" height="${viewport.height - 190}" rx="24" fill="${card}"/>
-  <text x="64" y="210" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="${accent}">${escapeHtml(page.path)}</text>
-  <text x="64" y="265" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800" fill="${fg}">${escapeHtml(page.page)}</text>
-  <text x="64" y="314" font-family="Inter, Arial, sans-serif" font-size="26" fill="${fg}">State: ${escapeHtml(state)}</text>
-  <foreignObject x="64" y="350" width="${viewport.width - 128}" height="220">
-    <div xmlns="http://www.w3.org/1999/xhtml" style="font: 20px Inter, Arial, sans-serif; color: ${muted}; line-height: 1.5;">
-      ${escapeHtml(summary)}
-    </div>
-  </foreignObject>
-  <text x="64" y="${viewport.height - 76}" font-family="Inter, Arial, sans-serif" font-size="16" fill="${muted}">Deterministic synthetic preview artifact. Not produced from production data or credentials.</text>
-</svg>
-`;
+async function ensureBuilt() {
+  if (existsSync(resolve(frontendRoot, 'dist/index.html'))) return;
+  await run('npm', ['run', 'build'], { cwd: frontendRoot });
 }
 
+function startStaticServer() {
+  const dist = resolve(frontendRoot, 'dist');
+  const server = createServer((request, response) => {
+    const url = new URL(request.url || '/', baseURL);
+    let pathname = decodeURIComponent(url.pathname);
+    if (pathname === '/') pathname = '/index.html';
+    const candidate = resolve(dist, `.${pathname}`);
+    const file = candidate.startsWith(dist) && existsSync(candidate) ? candidate : resolve(dist, 'index.html');
+    response.setHeader('Content-Type', mime.get(extname(file)) || 'application/octet-stream');
+    createReadStream(file).pipe(response);
+  });
+  return new Promise((resolvePromise, reject) => {
+    server.once('error', reject);
+    server.listen(requestedPort, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') return reject(new Error('Could not determine screenshot server address'));
+      baseURL = `http://127.0.0.1:${address.port}`;
+      resolvePromise(server);
+    });
+  });
+}
+
+function stateFor(pageName, state) {
+  const base = {};
+  if (['signup', 'verify', 'login'].includes(pageName)) base.authenticated = false;
+
+  if (state === 'empty') return { ...base, jobs: [], profile: { ...defaultProfile, resumeText: '', experienceText: '', lastMatchRunMessage: '' } };
+  if (state === 'no-summary') return { ...base, jobs: [{ ...defaultJobs[0], summary: '', canonicalUrl: '' }] };
+
+  const fail = {};
+  if (pageName === 'signup' && state === 'server-error') fail['/api/signup'] = apiFailures.signup;
+  if (pageName === 'verify' && state === 'server-error') fail['/api/verify'] = apiFailures.verify;
+  if (pageName === 'login' && state === 'server-error') fail['/api/login'] = apiFailures.login;
+  if (pageName === 'dashboard' && state === 'request-failure') fail['/api/dashboard'] = apiFailures.dashboard;
+  if (pageName === 'profile-onboarding' && state === 'request-failure') fail['/api/profile'] = apiFailures.profileLoad;
+  if (pageName === 'job-matches' && state === 'request-failure') fail['/api/jobs'] = apiFailures.jobs;
+  if (pageName === 'job-match-detail' && state === 'request-failure') fail['/api/jobs/101'] = apiFailures.jobDetail;
+  return { ...base, fail };
+}
+
+async function driveState(page, row, state) {
+  const releaseLoadingRoutes = [];
+  if (state === 'loading') {
+    await page.route('**/api/**', async (route) => {
+      await new Promise((resolve) => releaseLoadingRoutes.push(resolve));
+      await route.fulfill({ status: 200, contentType: 'application/json; charset=utf-8', body: '{}' }).catch(() => {});
+    });
+  }
+
+  await page.goto(`${baseURL}${row.path}`);
+
+  if (state === 'validation-error') {
+    if (row.page === 'signup') await page.getByRole('button', { name: 'Create account and send code' }).click();
+    if (row.page === 'verify') await page.getByRole('button', { name: 'Verify and continue' }).click();
+    if (row.page === 'login') await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    if (row.page === 'profile-onboarding') {
+      await page.getByLabel('Resume text').fill('');
+      await page.getByLabel('Experience bullets').fill('');
+      await page.getByRole('button', { name: 'Save and request prior-week match run' }).click();
+    }
+  }
+
+  if (state === 'server-error') {
+    if (row.page === 'signup') {
+      await page.getByLabel('Email').fill('blocked@example.test');
+      await page.getByRole('button', { name: 'Create account and send code' }).click();
+    }
+    if (row.page === 'verify') {
+      await page.getByLabel('One-time code').fill('000000');
+      await page.getByRole('button', { name: 'Verify and continue' }).click();
+    }
+    if (row.page === 'login') {
+      await page.getByLabel('Email').fill('preview.user@example.test');
+      await page.getByLabel('Password').fill('bad-password');
+      await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    }
+  }
+
+  if (state === 'loading') {
+    await page.waitForTimeout(300);
+    for (const release of releaseLoadingRoutes) release();
+  } else {
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.waitForTimeout(100);
+  }
+}
+
+await ensureBuilt();
 await mkdir(outputRoot, { recursive: true });
+const server = await startStaticServer();
+const browser = await chromium.launch({ executablePath: chromiumExecutablePath(), headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 const manifest = [];
-for (const page of matrix) {
-  for (const state of page.states) {
-    for (const theme of themes) {
-      for (const viewport of viewports) {
-        const file = `${page.page}--${state}--${theme}--${viewport.name}.svg`;
-        const path = resolve(outputRoot, file);
-        await writeFile(path, svgFor({ page, state, theme, viewport }), 'utf8');
-        manifest.push({ file, page: page.page, path: page.path, state, theme, viewport });
+
+try {
+  for (const row of matrix) {
+    for (const state of row.states) {
+      for (const theme of themes) {
+        for (const viewport of viewports) {
+          const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+          const page = await context.newPage();
+          await setThemeBeforeNavigation(page, theme);
+          await installMockApi(page, makeBrowserApiState(stateFor(row.page, state)));
+          await driveState(page, row, state);
+          const file = `${row.page}--${state}--${theme}--${viewport.name}.png`;
+          const path = resolve(outputRoot, file);
+          await page.screenshot({ path, fullPage: true });
+          await context.close();
+          manifest.push({ file, page: row.page, path: row.path, state, theme, viewport });
+        }
       }
     }
   }
+} finally {
+  await browser.close();
+  await new Promise((resolvePromise) => server.close(resolvePromise));
 }
+
 await writeFile(resolve(outputRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-console.log(`Generated ${manifest.length} deterministic SVG screenshot placeholders in ${outputRoot}`);
+console.log(`Generated ${manifest.length} browser screenshots from the Vue app in ${outputRoot}`);
