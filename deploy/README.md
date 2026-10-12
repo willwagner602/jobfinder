@@ -12,7 +12,7 @@ npm ci
 npm run build
 ```
 
-The resulting `frontend/dist/` files are copied into the final web image at `/app/static`, which is the static asset directory served by the Go web service. The runtime image contains the Go web binary, templates, built static assets, and CA certificates only; it does not include Node, npm, Vite, or the development server.
+The resulting `frontend/dist/` files are copied into the final web image at `/app/static`, and the runtime image sets `SPA_ASSET_DIR=/app/static` so the Go web service serves the production asset bundle from that exact path. The runtime image contains the Go web binary, templates, built static assets, and CA certificates only; it does not include Node, npm, Vite, or the development server.
 
 For local frontend checks outside Docker, run the same commands from `frontend/`. The frontend package also provides `npm test` for component/unit checks. Browser-test and screenshot commands should be run as documented by the frontend test tooling once those scripts are present; production deployment does not require preview fixtures or production credentials for frontend asset builds.
 
