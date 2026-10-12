@@ -17,11 +17,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Require VERSION bump on pull requests
         if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
           git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -qx VERSION
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
       - name: Test suite and per-service coverage
         run: |
           go test ./...
@@ -56,7 +70,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/admin.Containerfile
+          file: deploy/web.Containerfile
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.sha }}
