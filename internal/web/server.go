@@ -60,6 +60,7 @@ type Server struct {
 	Notifier    Notifier
 	MatchRunner MatchRunner
 	Templates   *template.Template
+	Assets      http.FileSystem
 	SessionKey  []byte
 	Now         func() time.Time
 }
@@ -107,6 +108,10 @@ type jobDigest struct {
 }
 
 func New(databasePath, templateDir string, sessionKey []byte, notifier Notifier, runner MatchRunner) (*Server, error) {
+	return NewWithAssets(databasePath, templateDir, "frontend/dist", sessionKey, notifier, runner)
+}
+
+func NewWithAssets(databasePath, templateDir, assetDir string, sessionKey []byte, notifier Notifier, runner MatchRunner) (*Server, error) {
 	conn, err := db.Open(databasePath)
 	if err != nil {
 		return nil, err
@@ -128,7 +133,7 @@ func New(databasePath, templateDir string, sessionKey []byte, notifier Notifier,
 		conn.Close()
 		return nil, errors.New("session key must be at least 32 bytes")
 	}
-	return &Server{DB: conn, Notifier: notifierOrDefault(notifier), MatchRunner: runnerOrDefault(runner), Templates: tpl, SessionKey: sessionKey, Now: time.Now}, nil
+	return &Server{DB: conn, Notifier: notifierOrDefault(notifier), MatchRunner: runnerOrDefault(runner), Templates: tpl, Assets: http.Dir(assetDir), SessionKey: sessionKey, Now: time.Now}, nil
 }
 
 func ParseTemplates(dir string) (*template.Template, error) {
@@ -158,6 +163,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	mux.Handle("GET /assets/", s.assetHandler())
 	mux.HandleFunc("GET /api/session", s.apiSession)
 	mux.HandleFunc("POST /api/signup", s.apiSignup)
 	mux.HandleFunc("POST /api/verify", s.apiVerify)
@@ -168,19 +174,79 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/profile", s.requireAPIAuth(s.apiUpdateProfile))
 	mux.HandleFunc("GET /api/jobs", s.requireAPIAuth(s.apiJobsList))
 	mux.HandleFunc("GET /api/jobs/", s.requireAPIAuth(s.apiJobDetail))
-	mux.HandleFunc("GET /signup", s.signupForm)
+	mux.HandleFunc("GET /signup", s.serveSPA)
 	mux.HandleFunc("POST /signup", s.signupPost)
-	mux.HandleFunc("GET /verify", s.verifyForm)
+	mux.HandleFunc("GET /verify", s.serveSPA)
 	mux.HandleFunc("POST /verify", s.verifyPost)
-	mux.HandleFunc("GET /login", s.loginForm)
+	mux.HandleFunc("GET /login", s.serveSPA)
 	mux.HandleFunc("POST /login", s.loginPost)
 	mux.HandleFunc("POST /logout", s.requireAuth(s.logoutPost))
-	mux.HandleFunc("GET /", s.requireAuth(s.home))
-	mux.HandleFunc("GET /onboarding", s.requireAuth(s.onboardingForm))
+	mux.HandleFunc("GET /", s.serveSPA)
+	mux.HandleFunc("GET /onboarding", s.serveSPA)
 	mux.HandleFunc("POST /onboarding", s.requireAuth(s.onboardingPost))
-	mux.HandleFunc("GET /jobs", s.requireAuth(s.jobsList))
-	mux.HandleFunc("GET /jobs/", s.requireAuth(s.jobDetail))
+	mux.HandleFunc("GET /jobs", s.serveSPA)
+	mux.HandleFunc("GET /jobs/", s.serveSPA)
 	return securityHeaders(mux)
+}
+
+func (s *Server) assetHandler() http.Handler {
+	return http.FileServer(s.assets())
+}
+
+func (s *Server) assets() http.FileSystem {
+	if s.Assets != nil {
+		return s.Assets
+	}
+	return http.Dir("frontend/dist")
+}
+
+func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
+	if !isSPARoute(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := s.assets().Open("index.html")
+	if err != nil {
+		s.serveLegacyUserRoute(w, r)
+		return
+	}
+	defer f.Close()
+	s.csrf(w, r)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := io.Copy(w, f); err != nil {
+		http.Error(w, "failed to serve application", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) serveLegacyUserRoute(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == "/signup":
+		s.signupForm(w, r)
+	case r.URL.Path == "/verify":
+		s.verifyForm(w, r)
+	case r.URL.Path == "/login":
+		s.loginForm(w, r)
+	case r.URL.Path == "/":
+		s.requireAuth(s.home)(w, r)
+	case r.URL.Path == "/onboarding":
+		s.requireAuth(s.onboardingForm)(w, r)
+	case r.URL.Path == "/jobs":
+		s.requireAuth(s.jobsList)(w, r)
+	case strings.HasPrefix(r.URL.Path, "/jobs/"):
+		s.requireAuth(s.jobDetail)(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func isSPARoute(path string) bool {
+	if path == "/" || path == "/signup" || path == "/verify" || path == "/login" || path == "/onboarding" || path == "/jobs" {
+		return true
+	}
+	if strings.HasPrefix(path, "/jobs/") {
+		return strings.TrimPrefix(path, "/jobs/") != ""
+	}
+	return false
 }
 
 func securityHeaders(next http.Handler) http.Handler {

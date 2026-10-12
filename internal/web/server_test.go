@@ -88,14 +88,86 @@ func (r *captureRunner) RunPriorWeek(_ context.Context, userID int64, start, end
 	return nil
 }
 
-func TestProtectedPagesRequireAuth(t *testing.T) {
+func TestSPARoutesServeIndex(t *testing.T) {
 	s := newTestServer(t)
-	for _, path := range []string{"/", "/onboarding", "/jobs"} {
+	h := s.Routes()
+	for _, path := range []string{"/", "/signup", "/verify", "/login", "/onboarding", "/jobs", "/jobs/123"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		s.Routes().ServeHTTP(rec, req)
-		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-			t.Fatalf("%s got status %d location %q, want redirect to /login", path, rec.Code, rec.Header().Get("Location"))
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, rec.Code)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Fatalf("%s content type = %q, want SPA HTML", path, got)
+		}
+		if !strings.Contains(rec.Body.String(), "vue-spa") || strings.Contains(rec.Body.String(), "home ") {
+			t.Fatalf("%s did not serve SPA index: %s", path, rec.Body.String())
+		}
+	}
+}
+
+func TestLegacyUserRoutesOnlyWhenSPAIndexMissing(t *testing.T) {
+	s := newTestServer(t)
+	s.Assets = http.FS(fstest.MapFS{})
+	h := s.Routes()
+	uid := insertLiveUser(t, s.DB, "legacy@example.com")
+	matchID := insertMatch(t, s.DB, uid)
+	session := []*http.Cookie{sessionCookieFor(t, s, uid)}
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/signup", "<form>"},
+		{"/verify", "<form>"},
+		{"/login", "<form>"},
+		{"/", "legacy@example.com"},
+		{"/onboarding", "onboarding"},
+		{"/jobs", "Platform Engineer"},
+		{"/jobs/" + strconvI64(matchID), "Platform Engineer"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		for _, c := range session {
+			req.AddCookie(c)
+		}
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("%s status=%d body=%s want %q", tc.path, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}
+
+func TestSPARouteFallbackDoesNotShadowReservedRoutes(t *testing.T) {
+	s := newTestServer(t)
+	h := s.Routes()
+
+	apiRec := getJSON(t, h, "/api/profile", nil)
+	if apiRec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api/profile status = %d, want 401", apiRec.Code)
+	}
+
+	healthRec := httptest.NewRecorder()
+	h.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if healthRec.Code != http.StatusNoContent {
+		t.Fatalf("/healthz status = %d, want 204", healthRec.Code)
+	}
+
+	assetRec := httptest.NewRecorder()
+	h.ServeHTTP(assetRec, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
+	if assetRec.Code != http.StatusOK || !strings.Contains(assetRec.Body.String(), "built asset") {
+		t.Fatalf("/assets/app.js status=%d body=%s", assetRec.Code, assetRec.Body.String())
+	}
+
+	for _, path := range []string{"/api/unknown", "/admin", "/internal", "/static/missing.css", "/does-not-exist"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", path, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "vue-spa") {
+			t.Fatalf("%s unexpectedly served SPA index", path)
 		}
 	}
 }
@@ -130,17 +202,7 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 		t.Fatalf("user not live/confirmed: %s %+v", status, confirmed)
 	}
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	for _, c := range sessionCookies {
-		req.AddCookie(c)
-	}
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("authenticated home status %d", rec.Code)
-	}
-
-	csrf, cookies = getCSRFWithCookies(t, h, "/onboarding", sessionCookies)
+	csrf, cookies = getAPICSRF(t, h, sessionCookies)
 	cookies = append(cookies, sessionCookies...)
 	postForm(t, h, "/onboarding", url.Values{"resume_text": {"resume text"}, "experience_text": {"bullet one"}, "desired_titles": {"Engineer\nStaff Engineer"}, "search_preferences": {"remote only"}, "blocked_companies": {"BadCo"}, "csrf": {csrf}}, cookies)
 	if runner.calls != 1 {
@@ -575,33 +637,23 @@ func TestSMTPNotifierRequiresConfiguration(t *testing.T) {
 	}
 }
 
-func TestJobPagesAreUserSpecific(t *testing.T) {
+func TestJobAPIRoutesAreUserSpecific(t *testing.T) {
 	s := newTestServer(t)
-	ctx := context.Background()
 	uid1 := insertLiveUser(t, s.DB, "one@example.com")
 	uid2 := insertLiveUser(t, s.DB, "two@example.com")
 	matchID := insertMatch(t, s.DB, uid1)
-	_ = uid2
-	s.setSession(httptest.NewRecorder(), uid1)
-	cookie := sessionCookieFor(t, s, uid1)
+	ownerCookie := sessionCookieFor(t, s, uid1)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-	req.AddCookie(cookie)
-	s.Routes().ServeHTTP(rec, req)
+	rec := getJSON(t, s.Routes(), "/api/jobs", []*http.Cookie{ownerCookie})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Platform Engineer") {
 		t.Fatalf("jobs list status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	otherCookie := sessionCookieFor(t, s, uid2)
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/jobs/"+strconvI64(matchID), nil)
-	req.AddCookie(otherCookie)
-	s.Routes().ServeHTTP(rec, req)
+	rec = getJSON(t, s.Routes(), "/api/jobs/"+strconvI64(matchID), []*http.Cookie{otherCookie})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("other user detail status=%d, want 404", rec.Code)
 	}
-	_ = ctx
 }
 
 func newTestServer(t *testing.T) *Server {
@@ -630,7 +682,14 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{DB: conn, Notifier: &captureNotifier{}, MatchRunner: &captureRunner{}, Templates: tpl, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+	return &Server{DB: conn, Notifier: &captureNotifier{}, MatchRunner: &captureRunner{}, Templates: tpl, Assets: fixtureAssets(), SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
+}
+
+func fixtureAssets() http.FileSystem {
+	return http.FS(fstest.MapFS{
+		"index.html":    &fstest.MapFile{Data: []byte(`<!doctype html><div id="app">vue-spa</div><script type="module" src="/assets/app.js"></script>`)},
+		"assets/app.js": &fstest.MapFile{Data: []byte(`console.log("built asset")`)},
+	})
 }
 
 func getAPICSRF(t *testing.T, h http.Handler, in []*http.Cookie) (string, []*http.Cookie) {
@@ -695,21 +754,9 @@ func getCSRF(t *testing.T, h http.Handler, path string) (string, []*http.Cookie)
 	return getCSRFWithCookies(t, h, path, nil)
 }
 
-func getCSRFWithCookies(t *testing.T, h http.Handler, path string, in []*http.Cookie) (string, []*http.Cookie) {
+func getCSRFWithCookies(t *testing.T, h http.Handler, _ string, in []*http.Cookie) (string, []*http.Cookie) {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	for _, c := range in {
-		req.AddCookie(c)
-	}
-	h.ServeHTTP(rec, req)
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == csrfCookieName {
-			return c.Value, rec.Result().Cookies()
-		}
-	}
-	t.Fatal("no csrf cookie")
-	return "", nil
+	return getAPICSRF(t, h, in)
 }
 
 func postForm(t *testing.T, h http.Handler, path string, form url.Values, cookies []*http.Cookie) *httptest.ResponseRecorder {
