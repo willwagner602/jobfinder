@@ -24,6 +24,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"jobs.willwagner.me/internal/schema"
 )
 
 // ---------------------------------------------------------------------------
@@ -763,6 +765,246 @@ func TestRenderUnknownTemplateFails(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CSRF and handler error-branch battery
 // ---------------------------------------------------------------------------
+
+func TestJSONAPILoginDashboardProfileAndLogout(t *testing.T) {
+	notifier := &captureNotifier{}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	hash, err := hashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO users(email, password_hash, email_confirmed_at, status) VALUES ('api-login@example.com', ?, '2025-01-01T00:00:00Z', 'live')`, hash); err != nil {
+		t.Fatal(err)
+	}
+	h := s.Routes()
+
+	csrf, cookies := getAPICSRF(t, h, nil)
+	sendCode := postJSON(t, h, "/api/login", map[string]any{"email": "api-login@example.com", "sendCode": true}, csrf, cookies)
+	if sendCode.Code != http.StatusAccepted || notifier.codes["api-login@example.com"] == "" {
+		t.Fatalf("api send-code status=%d body=%s code=%q", sendCode.Code, sendCode.Body.String(), notifier.codes["api-login@example.com"])
+	}
+
+	csrf, _ = getAPICSRF(t, h, cookies)
+	codeLogin := postJSON(t, h, "/api/login", map[string]string{"email": "api-login@example.com", "code": notifier.codes["api-login@example.com"]}, csrf, cookies)
+	if codeLogin.Code != http.StatusOK {
+		t.Fatalf("api code login status=%d body=%s", codeLogin.Code, codeLogin.Body.String())
+	}
+	cookies = append(cookies, codeLogin.Result().Cookies()...)
+
+	for _, path := range []string{"/api/dashboard", "/api/profile"} {
+		rec := getJSON(t, h, path, cookies)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	csrf, _ = getAPICSRF(t, h, cookies)
+	logout := postJSON(t, h, "/api/logout", map[string]string{}, csrf, cookies)
+	if logout.Code != http.StatusOK {
+		t.Fatalf("api logout status=%d body=%s", logout.Code, logout.Body.String())
+	}
+
+	csrf, cookies = getAPICSRF(t, h, nil)
+	passwordLogin := postJSON(t, h, "/api/login", map[string]string{"email": "api-login@example.com", "password": "correct horse battery staple"}, csrf, cookies)
+	if passwordLogin.Code != http.StatusOK {
+		t.Fatalf("api password login status=%d body=%s", passwordLogin.Code, passwordLogin.Body.String())
+	}
+}
+
+func TestJSONAPIValidationAndFailureBranches(t *testing.T) {
+	t.Run("bad json", func(t *testing.T) {
+		s := newTestServer(t)
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/signup", strings.NewReader(`{"email":`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("bad json status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("extra json document", func(t *testing.T) {
+		s := newTestServer(t)
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/signup", strings.NewReader(`{"email":"a@example.com"} {}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("extra json status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("signup validation", func(t *testing.T) {
+		s := newTestServer(t)
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		empty := postJSON(t, h, "/api/signup", map[string]string{"email": ""}, csrf, cookies)
+		if empty.Code != http.StatusBadRequest {
+			t.Fatalf("empty email status=%d body=%s", empty.Code, empty.Body.String())
+		}
+		if _, err := s.DB.Exec(`UPDATE site_config SET signups_disabled = 1 WHERE config_id = 1`); err != nil {
+			t.Fatal(err)
+		}
+		disabled := postJSON(t, h, "/api/signup", map[string]string{"email": "closed-api@example.com"}, csrf, cookies)
+		if disabled.Code != http.StatusForbidden {
+			t.Fatalf("disabled signup status=%d body=%s", disabled.Code, disabled.Body.String())
+		}
+	})
+
+	t.Run("signup unavailable and delivery failure", func(t *testing.T) {
+		s := newTestServer(t)
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "gone-api@example.com", schema.UserStatusTombstoned); err != nil {
+			t.Fatal(err)
+		}
+		gone := postJSON(t, h, "/api/signup", map[string]string{"email": "gone-api@example.com"}, csrf, cookies)
+		if gone.Code != http.StatusForbidden {
+			t.Fatalf("gone signup status=%d body=%s", gone.Code, gone.Body.String())
+		}
+		s.Notifier = erroringNotifier{}
+		failed := postJSON(t, h, "/api/signup", map[string]string{"email": "delivery-api@example.com"}, csrf, cookies)
+		if failed.Code != http.StatusInternalServerError {
+			t.Fatalf("delivery failure status=%d body=%s", failed.Code, failed.Body.String())
+		}
+	})
+
+	t.Run("login failures", func(t *testing.T) {
+		s := newTestServer(t)
+		hash, err := hashPassword("correct horse battery staple")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.Exec(`INSERT INTO users(email, password_hash, email_confirmed_at, status) VALUES ('api-badpw@example.com', ?, '2025-01-01T00:00:00Z', 'live')`, hash); err != nil {
+			t.Fatal(err)
+		}
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		pending := postJSON(t, h, "/api/login", map[string]string{"email": "missing@example.com", "password": "whatever"}, csrf, cookies)
+		if pending.Code != http.StatusForbidden {
+			t.Fatalf("missing login status=%d body=%s", pending.Code, pending.Body.String())
+		}
+		badCode := postJSON(t, h, "/api/login", map[string]string{"email": "api-badpw@example.com", "code": "000000"}, csrf, cookies)
+		if badCode.Code != http.StatusBadRequest {
+			t.Fatalf("bad code status=%d body=%s", badCode.Code, badCode.Body.String())
+		}
+		badPassword := postJSON(t, h, "/api/login", map[string]string{"email": "api-badpw@example.com", "password": "wrong password"}, csrf, cookies)
+		if badPassword.Code != http.StatusUnauthorized {
+			t.Fatalf("bad password status=%d body=%s", badPassword.Code, badPassword.Body.String())
+		}
+	})
+}
+
+func TestJSONAPIProfileAndJobErrorBranches(t *testing.T) {
+	t.Run("profile validation and runner failure", func(t *testing.T) {
+		s := newTestServer(t)
+		s.MatchRunner = erroringRunner{}
+		uid := insertLiveUser(t, s.DB, "api-profile@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		empty := putJSON(t, h, "/api/profile", map[string]string{}, csrf, cookies)
+		if empty.Code != http.StatusBadRequest {
+			t.Fatalf("empty profile status=%d body=%s", empty.Code, empty.Body.String())
+		}
+		failed := putJSON(t, h, "/api/profile", map[string]string{"resumeText": "resume"}, csrf, cookies)
+		if failed.Code != http.StatusBadGateway {
+			t.Fatalf("runner failure status=%d body=%s", failed.Code, failed.Body.String())
+		}
+	})
+
+	t.Run("job detail invalid id", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "api-job@example.com")
+		rec := getJSON(t, s.Routes(), "/api/jobs/not-a-number", []*http.Cookie{sessionCookieFor(t, s, uid)})
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("bad api job id status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func TestJSONAPIInternalErrorBranches(t *testing.T) {
+	t.Run("login code delivery failure", func(t *testing.T) {
+		s := newTestServer(t)
+		s.Notifier = erroringNotifier{}
+		insertLiveUser(t, s.DB, "api-code-fail@example.com")
+		h := s.Routes()
+		csrf, cookies := getAPICSRF(t, h, nil)
+		rec := postJSON(t, h, "/api/login", map[string]any{"email": "api-code-fail@example.com", "sendCode": true}, csrf, cookies)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("code failure status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("profile save database failure", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "api-profile-db@example.com")
+		csrf, cookies := getAPICSRF(t, s.Routes(), []*http.Cookie{sessionCookieFor(t, s, uid)})
+		s.DB.Close()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/profile", strings.NewReader(`{"resumeText":"resume"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", csrf)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		s.apiUpdateProfile(rec, req, &user{ID: uid, Email: "api-profile-db@example.com", Status: string(schema.UserStatusLive), EmailConfirmed: sql.NullString{String: "2025-01-01T00:00:00Z", Valid: true}})
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("profile db failure status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("jobs database failures", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "api-jobs-db@example.com")
+		u := &user{ID: uid, Email: "api-jobs-db@example.com", Status: string(schema.UserStatusLive), EmailConfirmed: sql.NullString{String: "2025-01-01T00:00:00Z", Valid: true}}
+		s.DB.Close()
+		cases := []struct {
+			path string
+			call func(http.ResponseWriter, *http.Request, *user)
+		}{
+			{"/api/dashboard", s.apiDashboard},
+			{"/api/jobs", s.apiJobsList},
+			{"/api/jobs/1", s.apiJobDetail},
+		}
+		for _, tc := range cases {
+			rec := httptest.NewRecorder()
+			tc.call(rec, httptest.NewRequest(http.MethodGet, tc.path, nil), u)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("%s db failure status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("mutating api csrf failures", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "api-csrf@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		for _, path := range []string{"/api/signup", "/api/verify", "/api/login", "/api/logout"} {
+			rec := postJSON(t, h, path, map[string]string{}, "wrong-"+csrf, cookies)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s bad csrf status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		}
+	})
+}
 
 func TestPostRoutesRejectBadOrMissingCSRF(t *testing.T) {
 	s := newTestServer(t)
