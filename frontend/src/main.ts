@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import { createRouter, createWebHistory } from 'vue-router';
 import App from './App.vue';
+import Landing from './pages/Landing.vue';
 import Dashboard from './pages/Dashboard.vue';
 import Signup from './pages/Signup.vue';
 import Verify from './pages/Verify.vue';
@@ -13,7 +14,8 @@ import './styles.css';
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', component: Dashboard },
+    { path: '/', component: Landing },
+    { path: '/dashboard', component: Dashboard },
     { path: '/signup', component: Signup },
     { path: '/verify', component: Verify },
     { path: '/login', component: Login },

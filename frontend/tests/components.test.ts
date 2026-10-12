@@ -31,7 +31,7 @@ describe('interactive component controls', () => {
     const alerts: string[] = [];
     vi.stubGlobal('alert', (message: string) => alerts.push(message));
 
-    expect(wrapper.get('a[aria-label="jobs.willwagner.me dashboard"]').attributes('href')).toBe('/');
+    expect(wrapper.get('a[aria-label="jobs.willwagner.me home"]').attributes('href')).toBe('/');
     expect(wrapper.text()).toContain('Profile');
     expect(wrapper.text()).toContain('Job matches');
     await wrapper.get('button[title="Toggle light or dark theme"]').trigger('click');

@@ -43,7 +43,7 @@ test.describe('browser-level user journeys', () => {
     await page.getByLabel('Password').fill('password');
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
 
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.getByRole('link', { name: 'Dashboard', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /Log out/ })).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/login')?.body).toMatchObject({ email: defaultUser.email, password: 'password' });
@@ -92,7 +92,7 @@ test.describe('browser-level user journeys', () => {
   test('shows dashboard links and navigates through jobs list and detail pages', async ({ page }) => {
     await installMockApi(page, makeBrowserApiState());
 
-    await page.goto('/');
+    await page.goto('/dashboard');
     await expect(page.getByRole('heading', { name: `Welcome, ${defaultUser.email}.` })).toBeVisible();
     await page.getByRole('link', { name: 'View job matches' }).click();
 
@@ -103,6 +103,18 @@ test.describe('browser-level user journeys', () => {
     await expect(page).toHaveURL(new RegExp(`/jobs/${defaultJobs[0].matchId}$`));
     await expect(page.getByRole('link', { name: 'Original listing' })).toBeVisible();
     await expect(page.getByText(defaultJobs[0].summary)).toBeVisible();
+  });
+
+  test('shows the public landing page and navigates toward signup', async ({ page }) => {
+    await installMockApi(page, makeBrowserApiState({ authenticated: false }));
+
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: /Welcome/ })).toBeVisible();
+    await expect(page.getByTestId('info-section')).toBeVisible();
+    await expect(page.getByTestId('landing-actions')).toBeVisible();
+
+    await page.getByRole('link', { name: 'Create an account' }).click();
+    await expect(page).toHaveURL(/\/signup$/);
   });
 
   test('changes theme manually and returns to following system preference', async ({ page }) => {

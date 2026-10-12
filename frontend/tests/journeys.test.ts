@@ -51,7 +51,7 @@ describe('browser-level user journeys', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(api.calls.find((call) => call.path === '/api/login')?.body).toMatchObject({ email: testUser.email, password: 'password' });
-    expect(router.currentRoute.value.path).toBe('/');
+    expect(router.currentRoute.value.path).toBe('/dashboard');
     expect(wrapper.text()).toContain('Dashboard');
     expect(wrapper.text()).toContain('Log out');
 
@@ -84,7 +84,7 @@ describe('browser-level user journeys', () => {
   });
 
   it('shows dashboard links and navigates through jobs list and detail pages', async () => {
-    const { wrapper, router } = await mountApp('/');
+    const { wrapper, router } = await mountApp('/dashboard');
 
     expect(wrapper.text()).toContain(`Welcome, ${testUser.email}`);
     await wrapper.get('a[href="/jobs"]').trigger('click');
@@ -102,7 +102,7 @@ describe('browser-level user journeys', () => {
   });
 
   it('changes theme manually and returns to following system preference', async () => {
-    const { wrapper } = await mountApp('/');
+    const { wrapper } = await mountApp('/dashboard');
 
     await wrapper.get('button[title="Toggle light or dark theme"]').trigger('click');
     expect(localStorage.getItem('jobs-theme')).toBe('dark');

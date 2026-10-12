@@ -181,6 +181,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /login", s.serveSPA)
 	mux.HandleFunc("POST /login", s.loginPost)
 	mux.HandleFunc("POST /logout", s.requireAuth(s.logoutPost))
+	mux.HandleFunc("GET /dashboard", s.serveSPA)
 	mux.HandleFunc("GET /", s.serveSPA)
 	mux.HandleFunc("GET /onboarding", s.serveSPA)
 	mux.HandleFunc("POST /onboarding", s.requireAuth(s.onboardingPost))
@@ -226,7 +227,7 @@ func (s *Server) serveLegacyUserRoute(w http.ResponseWriter, r *http.Request) {
 		s.verifyForm(w, r)
 	case r.URL.Path == "/login":
 		s.loginForm(w, r)
-	case r.URL.Path == "/":
+	case r.URL.Path == "/dashboard", r.URL.Path == "/":
 		s.requireAuth(s.home)(w, r)
 	case r.URL.Path == "/onboarding":
 		s.requireAuth(s.onboardingForm)(w, r)
@@ -240,7 +241,7 @@ func (s *Server) serveLegacyUserRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func isSPARoute(path string) bool {
-	if path == "/" || path == "/signup" || path == "/verify" || path == "/login" || path == "/onboarding" || path == "/jobs" {
+	if path == "/" || path == "/dashboard" || path == "/signup" || path == "/verify" || path == "/login" || path == "/onboarding" || path == "/jobs" {
 		return true
 	}
 	if strings.HasPrefix(path, "/jobs/") {

@@ -2,7 +2,8 @@
   { "page": "signup", "path": "/signup", "states": ["normal", "validation-error", "server-error"] },
   { "page": "verify", "path": "/verify?email=preview.user@example.test", "states": ["normal", "validation-error", "server-error"] },
   { "page": "login", "path": "/login", "states": ["normal", "validation-error", "server-error"] },
-  { "page": "dashboard", "path": "/", "states": ["populated", "empty", "loading", "request-failure"] },
+  { "page": "landing", "path": "/", "states": ["normal"] },
+  { "page": "dashboard", "path": "/dashboard", "states": ["populated", "empty", "loading", "request-failure"] },
   { "page": "profile-onboarding", "path": "/onboarding", "states": ["populated", "validation-error", "request-failure"] },
   { "page": "job-matches", "path": "/jobs", "states": ["populated", "empty", "loading", "request-failure"] },
   { "page": "job-match-detail", "path": "/jobs/101", "states": ["found", "no-summary", "request-failure"] }
