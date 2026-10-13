@@ -1,0 +1,5 @@
+# Ignore all files into the dir by default (sketches, responses, edits stay local)…
+*
+# …but keep this rule file and the workflow README in the repo.
+!.gitignore
+!README.md
