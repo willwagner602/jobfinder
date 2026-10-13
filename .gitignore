@@ -1,0 +1,12 @@
+.env
+.env.bak
+artifacts/
+coverage-*.out
+coverage-*.txt
+frontend/test-results/
+gmail-aliasing.png
+gmail-aliasing.png.xmp
+node_modules/
+routing.png
+worktrees/
+.worktrees/
