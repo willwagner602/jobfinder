@@ -4,6 +4,34 @@ import { RouterLink } from 'vue-router';
 import { apiGet, errorMessage, Job, Profile, session } from '../api';
 const loading = ref(true), error = ref('');
 const profile = ref<Profile>({}), recentJobs = ref<Job[]>([]);
-onMounted(async()=>{ try{ const data = await apiGet<{profile:Profile; recentJobs:Job[]}>('/api/dashboard'); profile.value=data.profile || {}; recentJobs.value=data.recentJobs || []; } catch(err){ error.value=errorMessage(err); } finally{ loading.value=false; } });
+onMounted(async () => {
+  try {
+    const data = await apiGet<{ profile: Profile; recentJobs: Job[] }>('/api/dashboard');
+    profile.value = data.profile || {};
+    recentJobs.value = data.recentJobs || [];
+  } catch (err) { error.value = errorMessage(err); }
+  finally { loading.value = false; }
+});
 </script>
-<template><section><div class="hero"><div><p class="pill">Dashboard</p><h1 class="text-4xl">Welcome<span v-if="session.user">, {{ session.user.email }}</span>.</h1><p class="text-muted">Keep your profile current, then review the newest job matches returned by the server.</p></div><div class="card"><h2 class="text-lg">Next steps</h2><div class="actions mt-4"><RouterLink class="button" to="/onboarding">Update resume and experience</RouterLink><RouterLink class="button secondary" to="/jobs">View job matches</RouterLink></div></div></div><p v-if="loading" class="card" role="status">Loading dashboard…</p><p v-else-if="error" class="alert error" role="alert">{{ error }}</p><div v-else class="grid gap-4 two-col"><article class="card"><h2>Profile status</h2><p class="text-muted">{{ profile.resumeText || profile.experienceText ? 'Profile text is saved. Update it any time to request a prior-week match run.' : 'No profile text yet. Save your profile to request a prior-week match run.' }}</p><p v-if="profile.lastMatchRunMessage" class="alert success">{{ profile.lastMatchRunMessage }}</p></article><article class="card"><h2>Recent matches</h2><div v-if="recentJobs.length" class="grid gap-3"><RouterLink v-for="job in recentJobs" :key="job.matchId" class="job-card card" :to="`/jobs/${job.matchId}`"><strong>{{ job.title }}</strong><span class="text-muted">{{ job.company }} — {{ job.decision }}<span v-if="job.rating"> ({{ job.rating }}/5)</span></span></RouterLink></div><div v-else class="empty">No matches yet. Save your profile to request a prior-week match run.</div></article></div></section></template>
+<template>
+  <section class="page-stack">
+    <header class="page-intro">
+      <p class="eyebrow">Dashboard</p>
+      <h1>Welcome<span v-if="session.user">, {{ session.user.email }}</span></h1>
+      <p class="muted">Keep your profile current, then review the newest job matches.</p>
+    </header>
+    <section class="card dashboard-next" aria-labelledby="next-steps-title">
+      <h2 id="next-steps-title">Next steps</h2>
+      <div class="actions actions-start">
+        <RouterLink class="button" to="/onboarding">Update resume and experience</RouterLink>
+        <RouterLink class="button secondary" to="/jobs">View job matches</RouterLink>
+      </div>
+    </section>
+    <p v-if="loading" class="card" role="status">Loading dashboard…</p>
+    <p v-else-if="error" class="alert error" role="alert">{{ error }}</p>
+    <div v-else class="dashboard-grid">
+      <article class="card content-card"><h2>Profile status</h2><p class="muted">{{ profile.resumeText || profile.experienceText ? 'Profile text is saved. Update it any time to request a prior-week match run.' : 'No profile text yet. Save your profile to request a prior-week match run.' }}</p><p v-if="profile.lastMatchRunMessage" class="alert success" role="status">{{ profile.lastMatchRunMessage }}</p></article>
+      <article class="card content-card"><h2>Recent matches</h2><div v-if="recentJobs.length" class="recent-list"><RouterLink v-for="job in recentJobs" :key="job.matchId" class="recent-job" :to="`/jobs/${job.matchId}`"><strong>{{ job.title }}</strong><span class="muted">{{ job.company }}</span><span class="job-status">{{ job.decision }}<template v-if="job.rating"> · {{ job.rating }}/5</template></span></RouterLink></div><div v-else class="empty">No matches yet. Save your profile to request a prior-week match run.</div></article>
+    </div>
+  </section>
+</template>

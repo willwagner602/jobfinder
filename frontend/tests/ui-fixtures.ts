@@ -68,7 +68,7 @@ export function installMockApi(overrides: MockApiState = {}) {
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
     calls.push({ path, init, body });
     const failure = state.fail[path];
-    if (failure) return json({ error: { code: failure.code, message: failure.message } }, failure.status);
+    if (failure && !(path === '/api/login' && body?.sendCode)) return json({ error: { code: failure.code, message: failure.message } }, failure.status);
 
     if (path === '/api/session') {
       return json({ authenticated: state.authenticated, csrfToken: state.csrfToken, user: state.authenticated ? state.user : undefined });

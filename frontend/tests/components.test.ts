@@ -72,21 +72,26 @@ describe('interactive component controls', () => {
   });
 
   it('login form validates inputs, requests an emailed code, and renders credential errors', async () => {
-    const { wrapper, api } = await mountWithRouter(Login, '/login', {
-      fail: { '/api/login': { status: 401, code: 'invalid_credentials', message: 'Invalid credentials.' } },
-    });
+    const failures = { '/api/login': { status: 401, code: 'invalid_credentials', message: 'Invalid credentials.' } };
+    const { wrapper, api } = await mountWithRouter(Login, '/login', { fail: failures });
 
     await wrapper.get('form').trigger('submit');
     expect(wrapper.text()).toContain('Email is required.');
 
     await wrapper.get('#login-email').setValue('preview.user@example.test');
     await wrapper.get('form').trigger('submit');
-    expect(wrapper.text()).toContain('Enter a password or one-time code.');
+    expect(wrapper.text()).toContain('Enter your password.');
 
-    await wrapper.findAll('button').find((button) => button.text() === 'Email me a code')!.trigger('click');
+    await wrapper.get('#login-password').setValue('bad-password');
+    await wrapper.get('form').trigger('submit');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(api.calls.find((call) => call.path === '/api/login')?.body).toMatchObject({ sendCode: true });
     expect(wrapper.text()).toContain('Invalid credentials.');
+
+    await wrapper.get('button.code-option').trigger('click');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.calls.find((call) => call.path === '/api/login' && call.body?.sendCode)?.body).toMatchObject({ sendCode: true });
+    expect(wrapper.get('#login-code')).toBeTruthy();
+    expect(wrapper.text()).toContain('A login code was sent if the account is ready.');
   });
 
   it('dashboard shows loading, empty, populated, and request failure states', async () => {

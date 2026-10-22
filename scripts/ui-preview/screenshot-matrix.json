@@ -1,7 +1,7 @@
 [
   { "page": "signup", "path": "/signup", "states": ["normal", "validation-error", "server-error"] },
   { "page": "verify", "path": "/verify?email=preview.user@example.test", "states": ["normal", "validation-error", "server-error"] },
-  { "page": "login", "path": "/login", "states": ["normal", "validation-error", "server-error"] },
+  { "page": "login", "path": "/login", "states": ["normal", "code-entry", "validation-error", "server-error"] },
   { "page": "landing", "path": "/", "states": ["normal"] },
   { "page": "dashboard", "path": "/dashboard", "states": ["populated", "empty", "loading", "request-failure"] },
   { "page": "profile-onboarding", "path": "/onboarding", "states": ["populated", "validation-error", "request-failure"] },

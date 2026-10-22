@@ -39,13 +39,16 @@ test.describe('browser-level user journeys', () => {
     const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByLabel('Email').fill(defaultUser.email);
-    await page.getByLabel('Password').fill('password');
+    await page.getByLabel('Password', { exact: true }).fill('password');
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
 
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.getByRole('link', { name: 'Dashboard', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /Log out/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Update resume and experience' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'View job matches' })).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/login')?.body).toMatchObject({ email: defaultUser.email, password: 'password' });
 
     await page.getByRole('button', { name: /Log out/ }).click();
@@ -58,13 +61,24 @@ test.describe('browser-level user journeys', () => {
     const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByLabel('Email').fill(defaultUser.email);
-    await page.getByRole('button', { name: 'Email me a code' }).click();
+    await page.getByRole('button', { name: 'Send me a one time code' }).click();
 
     await expect(page.getByRole('status')).toContainText('A login code was sent if the account is ready.');
+    await expect(page.getByLabel('One-time code')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use password instead' })).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/login' && call.body?.sendCode)?.body).toMatchObject({
       email: defaultUser.email,
       sendCode: true,
+    });
+
+    await page.getByLabel('One-time code').fill(defaultUser.loginCode);
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    expect(state.calls.find((call) => call.path === '/api/login' && call.body?.code)?.body).toMatchObject({
+      email: defaultUser.email,
+      code: defaultUser.loginCode,
     });
   });
 
@@ -90,10 +104,10 @@ test.describe('browser-level user journeys', () => {
   });
 
   test('shows dashboard links and navigates through jobs list and detail pages', async ({ page }) => {
-    await installMockApi(page, makeBrowserApiState());
+    await installMockApi(page, makeBrowserApiState({ authenticated: true }));
 
     await page.goto('/dashboard');
-    await expect(page.getByRole('heading', { name: `Welcome, ${defaultUser.email}.` })).toBeVisible();
+    await expect(page.getByRole('heading', { name: new RegExp(`Welcome,\\s*${defaultUser.email}`) })).toBeVisible();
     await page.getByRole('link', { name: 'View job matches' }).click();
 
     await expect(page).toHaveURL(/\/jobs$/);
@@ -155,12 +169,13 @@ test.describe('browser-level user journeys', () => {
     await expect(page.getByRole('alert')).toContainText('Invalid verification code.');
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page.getByLabel('Email')).toHaveJSProperty('validity.valid', false);
     await page.getByLabel('Email').fill(defaultUser.email);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Enter a password or one-time code.');
-    await page.getByLabel('Password').fill('bad-password');
+    await expect(page.getByRole('alert')).toContainText('Enter your password.');
+    await page.getByLabel('Password', { exact: true }).fill('bad-password');
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Invalid credentials.');
   });
