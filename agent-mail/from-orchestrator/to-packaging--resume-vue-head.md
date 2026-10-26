@@ -1,0 +1,3 @@
+# Packaging resume: Vue source available
+
+The Vue PR branch `vue-ui` at commit `3a506ac46c96e989da27348d1c1ae51b5e30197a` contains the frontend source, `frontend/package-lock.json`, and package scripts. In your dedicated packaging worktree, fetch `origin/vue-ui` and base/rebase your task branch on that commit, preserving your branch's assigned-file changes (there should be none from the earlier blocker). Read `frontend/package.json` and contract at `docs/ui-api-contract.md` from the updated worktree before implementing. Use `npm ci` / scripts exactly as defined by the real package. Continue owned files only, bump VERSION minimally, test Docker build and CI commands, then PR; do not merge.

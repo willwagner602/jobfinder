@@ -18,7 +18,8 @@ test.describe('browser-level user journeys', () => {
     await page.getByRole('button', { name: 'Create account and send code' }).click();
 
     await expect(page).toHaveURL(/\/verify\?email=preview\.user@example\.test/);
-    await expect(page.getByLabel('Email')).toHaveValue(defaultUser.email);
+    await expect(page.getByTestId('verification-email-notice')).toContainText(`We've sent an email to ${defaultUser.email}`);
+    await expect(page.getByLabel('Email')).toHaveCount(0);
     expect(state.calls.find((call) => call.path === '/api/signup')?.body).toMatchObject({
       email: defaultUser.email,
       password: 'correct horse battery staple',
@@ -28,7 +29,7 @@ test.describe('browser-level user journeys', () => {
     await page.getByRole('button', { name: 'Verify and continue' }).click();
 
     await expect(page).toHaveURL(/\/onboarding$/);
-    await expect(page.getByLabel('Resume text')).toHaveValue(defaultProfile.resumeText);
+    await expect(page.getByLabel('Upload Documents')).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/verify')?.body).toEqual({
       email: defaultUser.email,
       code: defaultUser.verificationCode,
@@ -82,25 +83,39 @@ test.describe('browser-level user journeys', () => {
     });
   });
 
-  test('edits profile/onboarding fields and shows the saved server message', async ({ page }) => {
+  test('redirects unauthenticated visitors from onboarding to login', async ({ page }) => {
+    const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
+
+    for (const path of ['/dashboard', '/onboarding', '/jobs', '/jobs/101']) {
+      await page.goto(path);
+      await expect(page).toHaveURL(new RegExp(`/login\\?redirect=${path.replaceAll('/', '\\/')}$`));
+      await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
+    }
+    expect(state.calls.some((call) => ['/api/profile', '/api/dashboard', '/api/jobs'].includes(call.path))).toBe(false);
+  });
+
+  test('uploads documents, edits title and company selections, and saves the profile', async ({ page }) => {
     const state = await installMockApi(page, makeBrowserApiState());
 
     await page.goto('/onboarding');
-    await expect(page.getByLabel('Resume text')).toHaveValue(defaultProfile.resumeText);
-    await page.getByLabel('Resume text').fill('Updated resume text');
-    await page.getByLabel('Experience bullets').fill('Built deterministic browser tests');
-    await page.getByLabel('Desired titles, one per line').fill('Staff Engineer');
-    await page.getByLabel('Search preferences JSON or notes').fill('Remote only');
-    await page.getByLabel('Blocked companies, one per line').fill('NopeCo');
-    await page.getByLabel('Matcher override').fill('default');
-    await page.getByRole('button', { name: 'Save and request prior-week match run' }).click();
+    await expect(page.getByLabel('Upload Documents')).toBeVisible();
+    await expect(page.getByLabel('Resume text')).toHaveCount(0);
+    await page.getByLabel('Desired titles').fill('Software');
+    await expect(page.getByRole('option', { name: 'Software Engineer' })).toBeVisible();
+    await page.getByRole('option', { name: 'Software Engineer' }).click();
+    await page.getByLabel('Blocked companies').fill('Nope');
+    await expect(page.getByRole('option', { name: 'NopeCo' })).toBeVisible();
+    await page.getByRole('option', { name: 'NopeCo' }).click();
+    await page.getByLabel('Upload Documents').setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF') });
+    await expect(page.getByText(/resume\.pdf/)).toBeVisible();
+    await page.getByRole('button', { name: 'Save profile' }).click();
 
-    await expect(page.getByRole('status')).toContainText(defaultProfile.lastMatchRunMessage);
+    await expect(page.getByRole('status')).toContainText('Profile saved.');
     expect(state.calls.find((call) => call.path === '/api/profile' && call.method === 'PUT')?.body).toMatchObject({
-      resumeText: 'Updated resume text',
-      experienceText: 'Built deterministic browser tests',
-      desiredTitles: 'Staff Engineer',
+      desiredTitles: 'Staff Platform Engineer\nPrincipal Software Engineer\nSoftware Engineer',
+      blockedCompanies: 'Example BadCo\nNopeCo',
     });
+    expect(state.calls.some((call) => call.path === '/api/documents' && call.method === 'POST')).toBe(true);
   });
 
   test('shows dashboard links and navigates through jobs list and detail pages', async ({ page }) => {

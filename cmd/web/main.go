@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"jobs.willwagner.me/internal/web"
+	"jobfinder/internal/web"
 )
 
 // run starts the web service using environment-driven configuration and keeps

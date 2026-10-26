@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: deploy/admin.Containerfile
-    image: ghcr.io/willwagner/jobs.willwagner.me:${VERSION:-local}
+    image: ghcr.io/willwagner602/jobfinder:${VERSION:-local}
     environment:
       JOBS_ADMIN_ADDR: ":8081"
       JOBS_DB_PATH: /data/jobs.sqlite3
@@ -11,7 +11,7 @@ services:
       JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-}
       JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-}
       JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-}
-      JOBS_SMTP_FROM: job-search@willwagner.me
+      JOBS_SMTP_FROM: jobs@jobfinder.you
     ports:
       - "8081:8081"
     volumes:
@@ -27,14 +27,14 @@ services:
     build:
       context: .
       dockerfile: deploy/web.Containerfile
-    image: ghcr.io/willwagner/jobs.willwagner.me-web:${VERSION:-local}
+    image: ghcr.io/willwagner602/jobfinder-web:${VERSION:-local}
     environment:
       JOBS_DB: /data/jobs.sqlite3
       WEB_ADDR: ":8080"
       JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:?set JOBS_SMTP_ADDR}
       JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:?set JOBS_SMTP_USERNAME}
       JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:?set JOBS_SMTP_PASSWORD}
-      JOBS_SMTP_FROM: job-search@willwagner.me
+      JOBS_SMTP_FROM: jobs@jobfinder.you
     ports:
       - "8080:8080"
     volumes:

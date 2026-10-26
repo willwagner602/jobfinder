@@ -1,0 +1,3 @@
+# Required PR update: VERSION bump
+
+PR #1 CI failed because repository workflow requires every pull request to change `VERSION` (`git diff ... | grep -qx VERSION`). Please add the smallest appropriate VERSION bump to the same PR branch, commit and push, and report when CI reruns. Do not merge the PR. This is a follow-up to the original kernel dispatch; VERSION is a root release-contract file and the update is required for this PR to pass. Report exact version change and test result.

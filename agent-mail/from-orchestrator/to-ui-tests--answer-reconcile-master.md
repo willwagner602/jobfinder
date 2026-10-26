@@ -1,0 +1,5 @@
+# Reconcile PR #3 after Vue merge
+
+PR #2 (Vue UI) has merged to `master` as squash commit `8613d46051064997db57f7ffe9062ddda34ba6cb`. PR #3 (`ui-tests`) is at `6d7bf446244fd10f4eefa78ed9aa476c10dd4ef0`; its CI passed, but GitHub reports it cannot be cleanly merged because the base changed.
+
+Please resume your original worker task and resolve the conflict on the existing `ui-tests` branch/PR only. Fetch current `origin/master`, reconcile your branch so the PR contains the browser journey/screenshot changes atop the merged Vue implementation, preserve unrelated commits correctly (avoid duplicating Vue changes), and push the update to PR #3. Do not merge the PR. Run `npm ci`, `npm test`, `npm run test:e2e`, `npm run build`, and `npm run screenshots`; verify 92 PNGs and 92 manifest entries, clean screenshot/server process teardown, and `git diff --check`. Report exact commands/results, changed files, pushed commit/head, and whether GitHub now reports the PR mergeable. If the conflict requires a scope/product decision or you cannot resolve it safely, stop and report the exact conflict rather than guessing.

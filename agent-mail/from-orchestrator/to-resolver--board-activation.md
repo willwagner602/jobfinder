@@ -1,0 +1,5 @@
+# Resolver question — board activation status
+
+Scope: The board-discovery review found that supported provider discoveries are inserted as `active`, violating `/home/wbw/work/jobs.willwagner.me/mvp-plan.md` §2 discovery upgrade path (“discovered candidates are never auto-activated”). The current merged kernel schema (`.worktrees/kernel/internal/db/db.go`) constrains `job_boards.status` to only `active` or `unsupported`; `unsupported` is intended for ATS types without adapters, so it cannot cleanly encode a supported-but-not-yet-approved candidate. Leaf ownership forbids edits to kernel paths.
+
+Please inspect the spec and current kernel/boards code and recommend a concrete resolution for the live build pipeline: whether to add a `discovered`/`pending` status via a sequential kernel migration and then rebase/review boards, or another safe approach. State exact DB/status semantics (including existing boards, unsupported ATS boards, and how/if discovered boards become active) and implications for the currently running worker. Do not modify files. Return a concise decided answer; no implementation.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 const ServiceName = "job-match-search"

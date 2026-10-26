@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
+	"jobfinder/internal/db"
 )
 
 // Listing is a provider-neutral job description ready for database ingestion.
@@ -153,7 +153,7 @@ func getJSON(ctx context.Context, client *http.Client, rawURL string, dst any) e
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", "jobs.willwagner.me job-description-search")
+		req.Header.Set("User-Agent", "jobfinder job-description-search")
 		resp, err := client.Do(req)
 		if err != nil {
 			return err
@@ -176,7 +176,7 @@ func getText(ctx context.Context, client *http.Client, rawURL string) (string, e
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", "jobs.willwagner.me job-description-search")
+		req.Header.Set("User-Agent", "jobfinder job-description-search")
 		resp, err := client.Do(req)
 		if err != nil {
 			return err

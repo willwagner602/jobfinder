@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 func TestStartupUpgradesDatabase(t *testing.T) {

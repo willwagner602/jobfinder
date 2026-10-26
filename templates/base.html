@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}} - jobs.willwagner.me</title>
+  <title>{{.Title}} - jobfinder</title>
   <link rel="stylesheet" href="/static/site.css">
 </head>
 <body>
 <header>
-  <h1>jobs.willwagner.me</h1>
+  <h1>jobfinder</h1>
   <nav>
     {{if .User}}<a href="/">Dashboard</a> <a href="/onboarding">Profile</a> <a href="/jobs">Job matches</a>
     <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Log out</button></form>{{else}}<a href="/signup">Sign up</a> <a href="/login">Log in</a>{{end}}

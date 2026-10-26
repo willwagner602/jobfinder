@@ -1,0 +1,8 @@
+# Admin, operations, and deployment task dispatch
+
+Task/branch/worktree: `ops`; cwd `/home/wbw/work/jobs.willwagner.me/.worktrees/ops`
+Spec: `/home/wbw/work/jobs.willwagner.me/mvp-plan.md`
+Kernel contracts are merged on base commit `70bab3e`. Read `internal/schema/schema.go`, `internal/db/db.go`, `docs/database/verification.md`.
+Owned paths only: `internal/admin/**`, `cmd/admin/**`, `deploy/**`, `docker-compose.yml`, `.github/workflows/**`, `VERSION`, `docs/operations/**`.
+
+Implement admin/operations acceptance criteria: admin management for issue/revoke tokens and approve/suspend users; separate process-history admin page exposing the job_history statuses/count/error details; liveness-only health routes for each service; container deployment with nginx reverse proxy; GHCR release gated on VERSION bump per PR and tested-commit tagging; mail outbox integration for jobs@willwagner.me; meaningful local CI/test configuration targeting >90% service coverage. Keep scopes disjoint; do not edit shared kernel/go.mod or other tasks; ask via mailbox for required shared-contract changes. Email/deployment credentials and production environment are not available: use safe config boundaries and deterministic tests, report live verification gaps. Final report `/home/wbw/work/jobs.willwagner.me/agent-mail/from-ops/to-orchestrator--report-final.md`; query files same dir. Commit on branch `ops`, report hash/checks/limitations. Coordinate email boundary with web task by writing a mailbox note if needed; do not modify its files.

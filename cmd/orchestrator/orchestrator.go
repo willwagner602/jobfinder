@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"jobs.willwagner.me/internal/db"
+	"jobfinder/internal/db"
 )
 
 // Startup prepares the shared database before independently running services

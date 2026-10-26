@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/jobs"
+	"jobfinder/internal/db"
+	"jobfinder/internal/jobs"
 )
 
 func TestMainInvokesRun(t *testing.T) {

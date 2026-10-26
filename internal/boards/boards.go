@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 const (

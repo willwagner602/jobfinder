@@ -32,9 +32,9 @@ async function logout() {
   <div class="min-h-screen shell-bg text-foreground">
     <header class="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
       <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4">
-        <RouterLink to="/" class="brand" aria-label="jobs.willwagner.me home">
+        <RouterLink to="/" class="brand" aria-label="jobfinder home">
           <BriefcaseBusiness class="h-6 w-6" aria-hidden="true" />
-          <span>jobs.willwagner.me</span>
+          <span>jobfinder</span>
         </RouterLink>
         <nav class="flex flex-wrap items-center gap-2" aria-label="Primary navigation">
           <RouterLink v-if="session.authenticated" to="/dashboard" class="nav-link">Dashboard</RouterLink>

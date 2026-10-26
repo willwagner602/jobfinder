@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 // brokenStore hands out a Store whose connection pool is closed, so every

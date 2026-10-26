@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/matching"
+	"jobfinder/internal/db"
+	"jobfinder/internal/matching"
 )
 
 func TestMainSuccessPath(t *testing.T) {

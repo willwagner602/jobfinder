@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 func TestEnsureCurrentFreshDatabase(t *testing.T) {
@@ -18,7 +18,7 @@ func TestEnsureCurrentFreshDatabase(t *testing.T) {
 		t.Fatalf("EnsureCurrent: %v", err)
 	}
 	assertVersion(t, conn, schema.CurrentVersion)
-	for _, table := range []string{"users", "user_configs", "user_history", "job_boards", "job_listings", "job_listing_versions", "job_matches", "job_history", "site_config"} {
+	for _, table := range []string{"users", "user_configs", "user_history", "job_boards", "job_listings", "job_listing_versions", "job_matches", "job_history", "site_config", "titles", "companies", "documents"} {
 		assertTableExists(t, conn, table)
 	}
 }

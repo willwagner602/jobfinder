@@ -1,0 +1,8 @@
+# Web task dispatch
+
+Task/branch/worktree: `web`; cwd `/home/wbw/work/jobs.willwagner.me/.worktrees/web`
+Spec: `/home/wbw/work/jobs.willwagner.me/mvp-plan.md`
+Kernel contracts are merged on base commit `70bab3e`. Read `internal/schema/schema.go`, `internal/db/db.go`, `docs/database/verification.md`.
+Owned paths only: `internal/web/**`, `cmd/web/**`, `templates/**`, `static/**`.
+
+Implement spec Implementation Plan §1 and user job list/detail pages. Build server-rendered Go pages with password and emailed one-time-code signup/login, email confirmation before account live, authenticated sessions, secure password storage and session handling, resume/experience-bullet intake, persisted profile/config, and user-specific prior-week match run kickoff via a narrow boundary. Include tests for auth protections and onboarding. Public signup/verification routes remain accessible; all protected pages require auth. Keep stdlib/minimal dependencies. Do not edit shared kernel files/go.mod or other task scopes; if a new dependency/shared contract is necessary, ask through mailbox rather than changing those paths. Mailbox final report: `/home/wbw/work/jobs.willwagner.me/agent-mail/from-web/to-orchestrator--report-final.md`; blocker query in same directory using `to-orchestrator--query-<topic>.md`. Commit to branch `web`; report hash, tests, assumptions, gaps. Never claim live email delivery without credentials; coordinate via notifier interface already in kernel contract if present.

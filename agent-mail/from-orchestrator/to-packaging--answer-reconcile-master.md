@@ -1,0 +1,5 @@
+# Reconcile PR #4 after UI merges
+
+PR #2 Vue UI merged as `8613d46051064997db57f7ffe9062ddda34ba6cb`; PR #3 browser tests/screenshots merged as `4ed98c5becf93a27bd18ae43f3a841a70aedaf12`. PR #4 (`packaging`) remains open at `9faedb5e6908e2dcdd67dd05ad834065f6a98f4f`, and GitHub reports it is `CONFLICTING` against current `master`.
+
+Please resume your original packaging worker in its existing worktree. Rebase only the packaging-owned commits onto latest `origin/master`, preserving the merged Vue and test commits without duplicating them. Push the existing branch/PR #4 (force-with-lease only if required). Run the task's local checks: `go test ./...`, `cd frontend && npm ci && npm test && npm run test:e2e && npm run build`, packaging/container build verification per your task, and `git diff --check`. Do not merge. Report exact commands/results, new head, and GitHub mergeability/CI. If conflict resolution requires altering ownership/scope or cannot be done safely, stop with exact details.

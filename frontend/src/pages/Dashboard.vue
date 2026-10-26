@@ -30,7 +30,7 @@ onMounted(async () => {
     <p v-if="loading" class="card" role="status">Loading dashboard…</p>
     <p v-else-if="error" class="alert error" role="alert">{{ error }}</p>
     <div v-else class="dashboard-grid">
-      <article class="card content-card"><h2>Profile status</h2><p class="muted">{{ profile.resumeText || profile.experienceText ? 'Profile text is saved. Update it any time to request a prior-week match run.' : 'No profile text yet. Save your profile to request a prior-week match run.' }}</p><p v-if="profile.lastMatchRunMessage" class="alert success" role="status">{{ profile.lastMatchRunMessage }}</p></article>
+      <article class="card content-card"><h2>Profile status</h2><p class="muted">{{ profile.hasProfile ? `Profile saved${profile.documentCount ? ` · ${profile.documentCount} document${profile.documentCount === 1 ? '' : 's'} uploaded` : ''}.` : 'Profile not set up yet. Upload documents and choose desired titles and blocked companies.' }}</p><p v-if="profile.lastMatchRunMessage" class="alert success" role="status">{{ profile.lastMatchRunMessage }}</p></article>
       <article class="card content-card"><h2>Recent matches</h2><div v-if="recentJobs.length" class="recent-list"><RouterLink v-for="job in recentJobs" :key="job.matchId" class="recent-job" :to="`/jobs/${job.matchId}`"><strong>{{ job.title }}</strong><span class="muted">{{ job.company }}</span><span class="job-status">{{ job.decision }}<template v-if="job.rating"> · {{ job.rating }}/5</template></span></RouterLink></div><div v-else class="empty">No matches yet. Save your profile to request a prior-week match run.</div></article>
     </div>
   </section>

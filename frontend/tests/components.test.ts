@@ -31,7 +31,7 @@ describe('interactive component controls', () => {
     const alerts: string[] = [];
     vi.stubGlobal('alert', (message: string) => alerts.push(message));
 
-    expect(wrapper.get('a[aria-label="jobs.willwagner.me home"]').attributes('href')).toBe('/');
+    expect(wrapper.get('a[aria-label="jobfinder home"]').attributes('href')).toBe('/');
     expect(wrapper.text()).toContain('Profile');
     expect(wrapper.text()).toContain('Job matches');
     await wrapper.get('button[title="Toggle light or dark theme"]').trigger('click');
@@ -60,15 +60,16 @@ describe('interactive component controls', () => {
       fail: { '/api/verify': { status: 400, code: 'invalid_code', message: 'Invalid verification code.' } },
     });
 
-    await wrapper.get('#verify-email').setValue('');
+    expect(wrapper.text()).toContain("We've sent an email to");
+    expect(wrapper.find('#verify-email').exists()).toBe(false);
     await wrapper.get('form').trigger('submit');
     expect(wrapper.text()).toContain('Email and verification code are required.');
-
-    await wrapper.get('#verify-email').setValue('preview.user@example.test');
     await wrapper.get('#verify-code').setValue('000000');
     await wrapper.get('form').trigger('submit');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(wrapper.text()).toContain('Invalid verification code.');
+    expect(wrapper.text()).toContain("We've sent an email to");
+    expect(wrapper.find('#verify-email').exists()).toBe(false);
   });
 
   it('login form validates inputs, requests an emailed code, and renders credential errors', async () => {
@@ -108,16 +109,14 @@ describe('interactive component controls', () => {
     expect(failed.wrapper.text()).toContain('Dashboard unavailable.');
   });
 
-  it('profile form validates required text and renders save failures', async () => {
+  it('profile form shows document upload and saves selection failures', async () => {
     const { wrapper } = await mountWithRouter(Profile, '/onboarding', {
       profile: { resumeText: '', experienceText: '', desiredTitles: '', searchPreferences: '', blockedCompanies: '', matcherName: '', lastMatchRunMessage: '' },
       fail: { '/api/profile': { status: 500, code: 'profile_save_failed', message: 'Profile could not be saved.' } },
     });
 
-    await wrapper.get('form').trigger('submit');
-    expect(wrapper.text()).toContain('Resume text or experience bullets are required.');
-
-    await wrapper.get('#experience-text').setValue('Led production migrations');
+    expect(wrapper.text()).toContain('Upload Documents');
+    expect(wrapper.find('#resume-text').exists()).toBe(false);
     await wrapper.get('form').trigger('submit');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(wrapper.text()).toContain('Profile could not be saved.');

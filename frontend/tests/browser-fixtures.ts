@@ -3,6 +3,8 @@ import type { Page } from '@playwright/test';
 export const defaultUser = { email: 'preview.user@example.test', verificationCode: '123456', loginCode: '654321' };
 
 export const defaultProfile = {
+  hasProfile: true,
+  documentCount: 0,
   resumeText: 'Staff engineer with Vue, Go, and platform experience.',
   experienceText: 'Led API migrations\nImproved job matching reliability',
   desiredTitles: 'Staff Platform Engineer\nPrincipal Software Engineer',
@@ -50,6 +52,7 @@ type BrowserApiState = {
   jobs: typeof defaultJobs;
   fail: Partial<Record<string, BrowserApiFailure>>;
   calls: BrowserApiCall[];
+  documents: Array<{ id: number; filename: string; contentType: string; sizeBytes: number; createdAt: string }>;
 };
 
 export const apiFailures = {
@@ -84,6 +87,7 @@ export function makeBrowserApiState(overrides: Partial<BrowserApiState> = {}): B
     jobs: structuredClone(overrides.jobs ?? defaultJobs),
     fail: overrides.fail ?? {},
     calls: [],
+    documents: [],
   };
 }
 
@@ -93,7 +97,7 @@ export async function installMockApi(page: Page, state = makeBrowserApiState()) 
     const url = new URL(request.url());
     const path = url.pathname;
     const bodyText = request.postData();
-    const body = bodyText ? JSON.parse(bodyText) as Record<string, unknown> : undefined;
+    const body = bodyText && request.headers()['content-type']?.includes('application/json') ? JSON.parse(bodyText) as Record<string, unknown> : undefined;
     state.calls.push({ path, method: request.method(), body });
 
     const failure = state.fail[path];
@@ -117,11 +121,21 @@ export async function installMockApi(page: Page, state = makeBrowserApiState()) 
       return route.fulfill(jsonResponse({ status: 'logged_out' }));
     }
     if (path === '/api/dashboard') return route.fulfill(jsonResponse({ user: state.user, profile: state.profile, recentJobs: state.jobs.slice(0, 1) }));
-    if (path === '/api/profile' && request.method() === 'GET') return route.fulfill(jsonResponse({ user: state.user, profile: state.profile }));
+    if (path === '/api/profile' && request.method() === 'GET') return route.fulfill(jsonResponse({ user: state.user, profile: { ...state.profile, hasProfile: true, documentCount: state.documents.length } }));
+    if (path === '/api/documents' && request.method() === 'GET') return route.fulfill(jsonResponse({ documents: state.documents }));
+    if (path === '/api/documents' && request.method() === 'POST') {
+      const document = { id: state.documents.length + 1, filename: 'resume.pdf', contentType: 'application/pdf', sizeBytes: 4, createdAt: '2026-01-01T00:00:00Z' };
+      state.documents.push(document);
+      return route.fulfill(jsonResponse({ document }, 201));
+    }
+    if (path === '/api/titles') return route.fulfill(jsonResponse({ items: state.profile.desiredTitles ? ['Software Engineer', 'Software Architect'] : [] }));
+    if (path === '/api/companies') return route.fulfill(jsonResponse({ items: state.profile.blockedCompanies ? ['Example BadCo', 'NopeCo'] : [] }));
     if (path === '/api/profile' && request.method() === 'PUT') {
-      state.profile = { ...state.profile, ...body, lastMatchRunMessage: defaultProfile.lastMatchRunMessage };
+      const firstSave = !state.profile.hasProfile;
+      state.profile = { ...state.profile, ...body, hasProfile: true, documentCount: state.documents.length, lastMatchRunMessage: firstSave ? 'Profile saved and initial match run requested.' : 'Profile saved.' };
       return route.fulfill(jsonResponse({ profile: state.profile, message: state.profile.lastMatchRunMessage }));
     }
+    if (path === '/api/match-runs' && request.method() === 'POST') return route.fulfill(jsonResponse({ message: 'Prior-week match run requested.' }, 202));
     if (path === '/api/jobs') return route.fulfill(jsonResponse({ jobs: state.jobs }));
     if (path.startsWith('/api/jobs/')) {
       const matchId = Number(path.split('/').pop());

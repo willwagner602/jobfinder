@@ -9,7 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 const DriverName = "sqlite3"
@@ -131,6 +131,8 @@ func applyMigration(ctx context.Context, tx *sql.Tx, version int) error {
 		return execAll(ctx, tx, migration3)
 	case 4:
 		return execAll(ctx, tx, migration4)
+	case 5:
+		return execAll(ctx, tx, migration5)
 	default:
 		return fmt.Errorf("no migration for version %d", version)
 	}
@@ -307,6 +309,28 @@ var migration4 = []string{
 	`ALTER TABLE users_v4 RENAME TO users`,
 	`CREATE UNIQUE INDEX idx_users_email_active ON users(email) WHERE status <> 'tombstoned'`,
 	`INSERT INTO schema_migrations(version) VALUES (4)`,
+}
+
+var migration5 = []string{
+	`CREATE TABLE titles (
+		title_id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE COLLATE NOCASE
+	)`,
+	`CREATE TABLE companies (
+		company_id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE COLLATE NOCASE
+	)`,
+	`CREATE TABLE documents (
+		document_id INTEGER PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+		filename TEXT NOT NULL,
+		content_type TEXT NOT NULL,
+		size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+		content BLOB NOT NULL,
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`,
+	`CREATE INDEX idx_documents_user_created ON documents(user_id, created_at, document_id)`,
+	`INSERT INTO schema_migrations(version) VALUES (5)`,
 }
 
 type ListingVersionInput struct {

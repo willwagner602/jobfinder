@@ -1,0 +1,3 @@
+# Answer: browser tooling ownership
+
+Approved exception: you may edit only `frontend/package.json` and `frontend/package-lock.json` to add required Playwright/browser automation and precise `test:e2e`/`screenshots` scripts. Do not modify app source, Vite build config, CI, or deployment files. Communicate exact commands immediately to the packaging worker/orchestrator so packaging can wire them into CI. Keep all other assigned files and boundaries unchanged. Use the actual Vue app and captured browser screenshots, not SVG mockups.

@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/admin"
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/admin"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 const adminToken = "itests-admin-token"
