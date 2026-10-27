@@ -15,7 +15,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - jobs-data:/data
+      - ./data:/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
       interval: 30s
@@ -38,8 +38,6 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - jobs-data:/data
+      - ./data:/data
     restart: unless-stopped
 
-volumes:
-  jobs-data:

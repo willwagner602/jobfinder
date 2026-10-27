@@ -598,7 +598,7 @@ func stripTags(s string) string {
 }
 
 func ActiveBoards(ctx context.Context, conn *sql.DB) ([]Board, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT board_id, board_url, company, coalesce(ats_type,''), metadata_json FROM job_boards WHERE status='active' ORDER BY board_id`)
+	rows, err := conn.QueryContext(ctx, `SELECT b.board_id, b.board_url, COALESCE(c.name,b.company), coalesce(b.ats_type,''), b.metadata_json FROM job_boards b LEFT JOIN companies c ON c.company_id=b.company_id WHERE b.status='active' ORDER BY b.board_id`)
 	if err != nil {
 		return nil, err
 	}

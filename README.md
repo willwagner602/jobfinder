@@ -44,7 +44,7 @@ Runtime configuration (compose reads from `.env`):
 - `JOBS_ADMIN_TOKEN` — bearer token required for `/admin` pages (bootstrap credential).
 - `JOBS_SMTP_ADDR`, `JOBS_SMTP_USERNAME`, `JOBS_SMTP_PASSWORD` — required by the web service at startup; email delivery for issued tokens needs them too.
 - `JOBS_SMTP_FROM` — defaults to `jobs@willwagner.me`.
-- `JOBS_DB_PATH` (admin) / `JOBS_DB` (web) — SQLite path; `/data/jobs.sqlite3` in compose.
+- `JOBS_DB_PATH` (admin) / `JOBS_DB` (web) — SQLite path; `/data/jobs.sqlite3` in compose, backed by the local `./data/jobs.sqlite3` file.
 - `JOBS_ADMIN_ADDR` / `WEB_ADDR` — listen addresses; default `:8081` / `:8080`.
 
 Without SMTP settings, token issuance returns the token in the HTTP response instead of emailing it.

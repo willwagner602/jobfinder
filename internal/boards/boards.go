@@ -183,10 +183,16 @@ func upsertCandidates(ctx context.Context, conn *sql.DB, candidates []Candidate,
 		if err != nil {
 			return res, err
 		}
-		var existing int64
+		if _, err := tx.ExecContext(ctx, `INSERT INTO companies(name, normalized_name) VALUES (?, lower(trim(?))) ON CONFLICT(normalized_name) DO NOTHING`, board.Company, board.Company); err != nil {
+			return res, err
+		}
+		var companyID, existing int64
+		if err := tx.QueryRowContext(ctx, `SELECT company_id FROM companies WHERE normalized_name=lower(trim(?))`, board.Company).Scan(&companyID); err != nil {
+			return res, err
+		}
 		err = tx.QueryRowContext(ctx, `SELECT board_id FROM job_boards WHERE board_url = ?`, board.URL).Scan(&existing)
 		if err == sql.ErrNoRows {
-			_, err = tx.ExecContext(ctx, `INSERT INTO job_boards (board_url, company, ats_type, status, metadata_json, discovered_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, board.URL, board.Company, nullString(board.ATSType), board.Status, string(metadata), board.DiscoveredAt.Format(time.RFC3339Nano), board.UpdatedAt.Format(time.RFC3339Nano))
+			_, err = tx.ExecContext(ctx, `INSERT INTO job_boards (board_url, company, company_id, site_id, ats_type, status, metadata_json, discovered_at, updated_at) VALUES (?, ?, ?, (SELECT site_id FROM company_job_sites WHERE company_id=? AND site_url=?), ?, ?, ?, ?, ?)`, board.URL, board.Company, companyID, companyID, board.URL, nullString(board.ATSType), board.Status, string(metadata), board.DiscoveredAt.Format(time.RFC3339Nano), board.UpdatedAt.Format(time.RFC3339Nano))
 			if err != nil {
 				return res, err
 			}
@@ -196,7 +202,7 @@ func upsertCandidates(ctx context.Context, conn *sql.DB, candidates []Candidate,
 		if err != nil {
 			return res, err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE job_boards SET company = ?, ats_type = ?, status = CASE WHEN status = 'active' THEN status ELSE ? END, metadata_json = ?, updated_at = ? WHERE board_id = ?`, board.Company, nullString(board.ATSType), board.Status, string(metadata), board.UpdatedAt.Format(time.RFC3339Nano), existing)
+		_, err = tx.ExecContext(ctx, `UPDATE job_boards SET company = ?, company_id = ?, site_id = (SELECT site_id FROM company_job_sites WHERE company_id=? AND site_url=?), ats_type = ?, status = CASE WHEN status = 'active' THEN status ELSE ? END, metadata_json = ?, updated_at = ? WHERE board_id = ?`, board.Company, companyID, companyID, board.URL, nullString(board.ATSType), board.Status, string(metadata), board.UpdatedAt.Format(time.RFC3339Nano), existing)
 		if err != nil {
 			return res, err
 		}
@@ -266,7 +272,7 @@ func canonicalURL(raw string) (string, error) {
 }
 
 func loadBoards(ctx context.Context, conn *sql.DB) ([]Board, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT board_url, company, coalesce(ats_type, ''), status, metadata_json, discovered_at, updated_at FROM job_boards ORDER BY company, board_url`)
+	rows, err := conn.QueryContext(ctx, `SELECT b.board_url, COALESCE(c.name,b.company), coalesce(b.ats_type, ''), b.status, b.metadata_json, b.discovered_at, b.updated_at FROM job_boards b LEFT JOIN companies c ON c.company_id=b.company_id ORDER BY COALESCE(c.name,b.company), b.board_url`)
 	if err != nil {
 		return nil, err
 	}

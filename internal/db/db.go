@@ -133,6 +133,8 @@ func applyMigration(ctx context.Context, tx *sql.Tx, version int) error {
 		return execAll(ctx, tx, migration4)
 	case 5:
 		return execAll(ctx, tx, migration5)
+	case 6:
+		return applyMigration6(ctx, tx)
 	default:
 		return fmt.Errorf("no migration for version %d", version)
 	}
