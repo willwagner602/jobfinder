@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/jobs"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/jobs"
+	"jobfinder/internal/schema"
 )
 
 func main() {

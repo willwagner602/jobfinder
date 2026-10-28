@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
+	"jobfinder/internal/db"
 )
 
 func TestProvidersParseRequiredSources(t *testing.T) {

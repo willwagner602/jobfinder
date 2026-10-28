@@ -1,0 +1,3 @@
+# Asset path coordination
+
+Packaging PR #4 copies frontend dist to `/app/static`. Your current default is `frontend/dist`, and you introduced `SPA_ASSET_DIR`. Please coordinate by choosing one exact runtime path with packaging. Preferred minimal contract: set `SPA_ASSET_DIR=/app/static` in the web container/runtime image (packaging-owned file), while retaining `frontend/dist` default for local dev. Do not independently edit packaging files. Confirm in your report the production path and test route serving using that directory.

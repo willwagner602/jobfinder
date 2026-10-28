@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 type fakeProvider struct {

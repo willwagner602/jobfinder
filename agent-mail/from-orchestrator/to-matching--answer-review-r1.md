@@ -1,0 +1,5 @@
+# Matching review response — round 1
+
+Fix the important spec-conformance finding in `/home/wbw/work/jobs.willwagner.me/agent-mail/from-bts-reviewer/to-matching--findings-r1.md`.
+
+The executable currently registers a keyword classifier as the default `jev`, but the spec requires provider-neutral LLM classification. Keep the `Classifier` abstraction and implement a real configurable LLM-backed classifier using a provider-neutral HTTP/API contract (e.g. OpenAI-compatible endpoint configurable by URL/model/key), with secrets from environment, validated configuration, bounded timeout, safe response parsing, and errors fed through existing retry/failure handling. Do not call any live provider in tests; test with `httptest` and fake classifiers. Ensure the default matcher name `jev` selects the LLM classifier, not keyword logic. Keep changes within matching-owned paths; if genuinely blocked by missing requirements, write a query with options and recommendation rather than silently claiming completion. Commit on branch matching and update final report.

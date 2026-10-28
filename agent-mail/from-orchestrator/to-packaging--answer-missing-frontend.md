@@ -1,0 +1,3 @@
+# Answer: frontend dependency
+
+Confirmed: wait for the Vue task to publish/merge the actual frontend source, package lockfile, and scripts, then resume this packaging task. Do not invent placeholders or packaging commands against an absent package manifest. Keep your assigned ownership unchanged and do not change VERSION until resumed against the real branch head. I will message with the merged commit/worktree update once available.

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 type Mailer interface {
@@ -257,7 +257,7 @@ func (s *Server) issueToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Mailer != nil && r.FormValue("send_email") == "true" {
 		body := fmt.Sprintf("Admin token for %s expires at %s UTC.\n\n%s\n", issued.Subject, issued.ExpiresAt.Format(time.RFC3339), issued.Token)
-		if err := s.Mailer.Send(r.Context(), issued.IssuedTo, "jobs.willwagner.me admin token", body); err != nil {
+		if err := s.Mailer.Send(r.Context(), issued.IssuedTo, "jobfinder admin token", body); err != nil {
 			http.Error(w, "token issued but email send failed: "+err.Error(), http.StatusBadGateway)
 			return
 		}

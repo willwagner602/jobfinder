@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 // ---------------------------------------------------------------------------
@@ -238,14 +238,16 @@ func TestSignupRejectsEmptyEmail(t *testing.T) {
 	}
 }
 
-func TestSignupFailsWhenDeliveryFails(t *testing.T) {
+func TestSignupSucceedsWhenDeliveryFails(t *testing.T) {
 	s := newTestServer(t)
 	s.Notifier = erroringNotifier{}
 	h := s.Routes()
 	csrf, cookies := getCSRF(t, h, "/signup")
 	rec := postForm(t, h, "/signup", url.Values{"email": {"bounce@example.com"}, "password": {"long enough password"}, "csrf": {csrf}}, cookies)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("delivery-failure signup status = %d, want 500", rec.Code)
+	// Delivery is asynchronous: signup succeeds and redirects even if the
+	// notifier eventually errors.
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("delivery-failure signup status = %d, want 303", rec.Code)
 	}
 }
 
@@ -333,12 +335,12 @@ func TestLoginSendsAndConsumesEmailCode(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Code sent") {
 		t.Fatalf("send_code body = %s", rec.Body.String())
 	}
-	if notifier.codes["codelogin@example.com"] == "" {
+	if notifier.codes.get("codelogin@example.com") == "" {
 		t.Fatal("code not captured")
 	}
 	// Wrong purpose code must be rejected: use login code against signup verify.
 	csrf, cookies = getCSRF(t, h, "/verify?email=codelogin%40example.com")
-	rec = postForm(t, h, "/verify", url.Values{"email": {"codelogin@example.com"}, "code": {notifier.codes["codelogin@example.com"]}, "csrf": {csrf}}, cookies)
+	rec = postForm(t, h, "/verify", url.Values{"email": {"codelogin@example.com"}, "code": {notifier.codes.get("codelogin@example.com")}, "csrf": {csrf}}, cookies)
 	if !strings.Contains(rec.Body.String(), "Invalid or expired code") {
 		t.Fatalf("wrong-purpose code was accepted: %s", rec.Body.String())
 	}
@@ -354,7 +356,7 @@ func TestLoginEmailCodeSuccess(t *testing.T) {
 	csrf, cookies := getCSRF(t, h, "/login")
 	postForm(t, h, "/login", url.Values{"email": {"codesession@example.com"}, "send_code": {"1"}, "csrf": {csrf}}, cookies)
 	csrf, cookies = getCSRF(t, h, "/login")
-	rec := postForm(t, h, "/login", url.Values{"email": {"codesession@example.com"}, "code": {notifier.codes["codesession@example.com"]}, "csrf": {csrf}}, cookies)
+	rec := postForm(t, h, "/login", url.Values{"email": {"codesession@example.com"}, "code": {notifier.codes.get("codesession@example.com")}, "csrf": {csrf}}, cookies)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
 		t.Fatalf("code login status = %d location = %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -777,12 +779,12 @@ func TestJSONAPILoginDashboardProfileAndLogout(t *testing.T) {
 
 	csrf, cookies := getAPICSRF(t, h, nil)
 	sendCode := postJSON(t, h, "/api/login", map[string]any{"email": "api-login@example.com", "sendCode": true}, csrf, cookies)
-	if sendCode.Code != http.StatusAccepted || notifier.codes["api-login@example.com"] == "" {
-		t.Fatalf("api send-code status=%d body=%s code=%q", sendCode.Code, sendCode.Body.String(), notifier.codes["api-login@example.com"])
+	if sendCode.Code != http.StatusAccepted || notifier.codes.get("api-login@example.com") == "" {
+		t.Fatalf("api send-code status=%d body=%s code=%q", sendCode.Code, sendCode.Body.String(), notifier.codes.get("api-login@example.com"))
 	}
 
 	csrf, _ = getAPICSRF(t, h, cookies)
-	codeLogin := postJSON(t, h, "/api/login", map[string]string{"email": "api-login@example.com", "code": notifier.codes["api-login@example.com"]}, csrf, cookies)
+	codeLogin := postJSON(t, h, "/api/login", map[string]string{"email": "api-login@example.com", "code": notifier.codes.get("api-login@example.com")}, csrf, cookies)
 	if codeLogin.Code != http.StatusOK {
 		t.Fatalf("api code login status=%d body=%s", codeLogin.Code, codeLogin.Body.String())
 	}
@@ -872,8 +874,10 @@ func TestJSONAPIValidationAndFailureBranches(t *testing.T) {
 			t.Fatalf("gone signup status=%d body=%s", gone.Code, gone.Body.String())
 		}
 		s.Notifier = erroringNotifier{}
+		// Delivery is asynchronous: a failing notifier no longer fails the
+		// signup; the API still returns 202 and the code expires unconsumed.
 		failed := postJSON(t, h, "/api/signup", map[string]string{"email": "delivery-api@example.com"}, csrf, cookies)
-		if failed.Code != http.StatusInternalServerError {
+		if failed.Code != http.StatusAccepted {
 			t.Fatalf("delivery failure status=%d body=%s", failed.Code, failed.Body.String())
 		}
 	})
@@ -904,6 +908,39 @@ func TestJSONAPIValidationAndFailureBranches(t *testing.T) {
 	})
 }
 
+func TestJSONAPIMatchRunBranches(t *testing.T) {
+	t.Run("missing profile", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "match-no-profile@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		rec := postJSON(t, h, "/api/match-runs", map[string]string{}, csrf, cookies)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("missing profile status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("database failure", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "match-db-failure@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		s.DB.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/match-runs", strings.NewReader(`{}`))
+		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: csrf})
+		req.Header.Set("X-CSRF-Token", csrf)
+		rec := httptest.NewRecorder()
+		s.apiRequestMatchRun(rec, req, &user{ID: uid})
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("database failure status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
 func TestJSONAPIProfileAndJobErrorBranches(t *testing.T) {
 	t.Run("profile validation and runner failure", func(t *testing.T) {
 		s := newTestServer(t)
@@ -914,10 +951,10 @@ func TestJSONAPIProfileAndJobErrorBranches(t *testing.T) {
 		csrf, extra := getAPICSRF(t, h, cookies)
 		cookies = append(cookies, extra...)
 		empty := putJSON(t, h, "/api/profile", map[string]string{}, csrf, cookies)
-		if empty.Code != http.StatusBadRequest {
+		if empty.Code != http.StatusBadGateway {
 			t.Fatalf("empty profile status=%d body=%s", empty.Code, empty.Body.String())
 		}
-		failed := putJSON(t, h, "/api/profile", map[string]string{"resumeText": "resume"}, csrf, cookies)
+		failed := putJSON(t, h, "/api/profile", map[string]string{"desiredTitles": "Engineer"}, csrf, cookies)
 		if failed.Code != http.StatusBadGateway {
 			t.Fatalf("runner failure status=%d body=%s", failed.Code, failed.Body.String())
 		}
@@ -1088,7 +1125,7 @@ func TestVerifyRejectsExpiredCode(t *testing.T) {
 	h := s.Routes()
 	csrf, cookies := getCSRF(t, h, "/signup")
 	postForm(t, h, "/signup", url.Values{"email": {"expired@example.com"}, "csrf": {csrf}}, cookies)
-	code := notifier.codes["expired@example.com"]
+	code := notifier.codes.get("expired@example.com")
 	// Advance the clock past the code TTL before verifying.
 	s.Now = func() time.Time { return issued.Add(2 * codeTTL) }
 	csrf, cookies = getCSRF(t, h, "/verify")

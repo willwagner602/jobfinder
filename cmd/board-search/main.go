@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"jobs.willwagner.me/internal/boards"
-	"jobs.willwagner.me/internal/db"
+	"jobfinder/internal/boards"
+	"jobfinder/internal/db"
 )
 
 func main() {

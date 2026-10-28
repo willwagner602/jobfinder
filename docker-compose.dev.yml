@@ -1,0 +1,63 @@
+# Development compose stack.
+#
+# Key properties (why this file exists):
+#   - `name: jobfinder-dev` pins the compose project name, so launching from any
+#     directory always resolves to the same containers, network, and volume.
+#     (Project-name-derived volume prefixes were the cause of "disappearing
+#     accounts": every directory got its own fresh database.)
+#   - The volume name is pinned to `jobfinder-dev-data`, separate from the
+#     production `jobfinder_jobs-data` volume.
+#   - Ports 8090 (web) and 8091 (admin) so the dev stack runs alongside a
+#     production stack on 8080/8081.
+#   - SMTP values are dummies; the app only dials SMTP when sending mail, so
+#     signup emails fail silently in dev. Override with real values via env if
+#     you need to exercise email flows.
+#
+# Usage: ./scripts/dev.sh up   (or: docker compose -f docker-compose.dev.yml up --build -d)
+# Reset dev DB: docker compose -f docker-compose.dev.yml down -v
+name: jobfinder-dev
+
+services:
+  admin:
+    build:
+      context: .
+      dockerfile: deploy/admin.Containerfile
+    image: jobfinder-dev-admin:local
+    environment:
+      JOBS_ADMIN_ADDR: ":8081"
+      JOBS_DB_PATH: /data/jobs.sqlite3
+      JOBS_ADMIN_TOKEN: ${JOBS_ADMIN_TOKEN:-dev-admin-token}
+      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-localhost:1025}
+      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-dev}
+      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-dev}
+      JOBS_SMTP_FROM: ${JOBS_SMTP_FROM:-dev@jobfinder.local}
+    ports:
+      - "8091:8081"
+    volumes:
+      - jobs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Containerfile
+    image: jobfinder-dev-web:local
+    environment:
+      JOBS_DB: /data/jobs.sqlite3
+      WEB_ADDR: ":8080"
+      JOBS_SMTP_ADDR: ${JOBS_SMTP_ADDR:-localhost:1025}
+      JOBS_SMTP_USERNAME: ${JOBS_SMTP_USERNAME:-dev}
+      JOBS_SMTP_PASSWORD: ${JOBS_SMTP_PASSWORD:-dev}
+      JOBS_SMTP_FROM: ${JOBS_SMTP_FROM:-dev@jobfinder.local}
+    ports:
+      - "8090:8080"
+    volumes:
+      - jobs-data:/data
+
+volumes:
+  jobs-data:
+    name: jobfinder-dev-data

@@ -8,7 +8,7 @@ import (
 )
 
 // CurrentVersion is the schema version expected by all services in this build.
-const CurrentVersion = 4
+const CurrentVersion = 6
 
 type ProcessStatus string
 

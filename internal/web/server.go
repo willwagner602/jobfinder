@@ -15,6 +15,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -23,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 const (
@@ -92,6 +93,8 @@ type profileData struct {
 	BlockedCompanies    string `json:"blockedCompanies"`
 	MatcherName         string `json:"matcherName"`
 	LastMatchRunMessage string `json:"lastMatchRunMessage,omitempty"`
+	HasProfile          bool   `json:"hasProfile"`
+	DocumentCount       int    `json:"documentCount"`
 }
 
 type jobDigest struct {
@@ -172,6 +175,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/dashboard", s.requireAPIAuth(s.apiDashboard))
 	mux.HandleFunc("GET /api/profile", s.requireAPIAuth(s.apiProfile))
 	mux.HandleFunc("PUT /api/profile", s.requireAPIAuth(s.apiUpdateProfile))
+	mux.HandleFunc("POST /api/match-runs", s.requireAPIAuth(s.apiRequestMatchRun))
+	mux.HandleFunc("GET /api/titles", s.requireAPIAuth(s.apiTitleSuggestions))
+	mux.HandleFunc("GET /api/companies", s.requireAPIAuth(s.apiCompanySuggestions))
+	mux.HandleFunc("GET /api/documents", s.requireAPIAuth(s.apiDocuments))
+	mux.HandleFunc("POST /api/documents", s.requireAPIAuth(s.apiUploadDocument))
 	mux.HandleFunc("GET /api/jobs", s.requireAPIAuth(s.apiJobsList))
 	mux.HandleFunc("GET /api/jobs/", s.requireAPIAuth(s.apiJobDetail))
 	mux.HandleFunc("GET /signup", s.serveSPA)
@@ -299,6 +307,14 @@ type apiProfileRequest struct {
 	SearchPreferences string `json:"searchPreferences"`
 	BlockedCompanies  string `json:"blockedCompanies"`
 	MatcherName       string `json:"matcherName"`
+}
+
+type apiDocument struct {
+	ID          int64  `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	CreatedAt   string `json:"createdAt"`
 }
 
 type apiJobDigest struct {
@@ -465,7 +481,10 @@ func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request, u *user) {
 }
 
 func (s *Server) apiProfile(w http.ResponseWriter, r *http.Request, u *user) {
-	s.writeJSON(w, http.StatusOK, map[string]any{"user": apiUser{Email: u.Email}, "profile": s.profile(r.Context(), u.ID)})
+	profile := s.profile(r.Context(), u.ID)
+	profile.DocumentCount = s.documentCount(r.Context(), u.ID)
+	profile.HasProfile = profile.DocumentCount > 0 || strings.TrimSpace(profile.DesiredTitles) != "[]" || strings.TrimSpace(profile.BlockedCompanies) != "[]"
+	s.writeJSON(w, http.StatusOK, map[string]any{"user": apiUser{Email: u.Email}, "profile": profile})
 }
 
 func (s *Server) apiUpdateProfile(w http.ResponseWriter, r *http.Request, u *user) {
@@ -477,29 +496,64 @@ func (s *Server) apiUpdateProfile(w http.ResponseWriter, r *http.Request, u *use
 	if !s.readJSON(w, r, &req) {
 		return
 	}
-	resume := strings.TrimSpace(req.Resume)
-	experience := strings.TrimSpace(req.Experience)
-	if resume == "" && experience == "" {
-		s.writeAPIError(w, http.StatusBadRequest, "profile_text_required", "Add a resume or experience bullets")
+	profile := &profileData{Resume: strings.TrimSpace(req.Resume), Experience: strings.TrimSpace(req.Experience), DesiredTitles: jsonList(req.DesiredTitles), SearchPreferences: jsonObjectFromText(req.SearchPreferences), BlockedCompanies: jsonList(req.BlockedCompanies), MatcherName: strings.TrimSpace(req.MatcherName)}
+	var hadProfile int
+	if err := s.DB.QueryRowContext(r.Context(), `SELECT count(*) FROM user_configs WHERE user_id = ?`, u.ID).Scan(&hadProfile); err != nil {
+		s.writeAPIError(w, http.StatusInternalServerError, "profile_save_failed", "Profile save failed")
 		return
 	}
-	profile := &profileData{Resume: resume, Experience: experience, DesiredTitles: jsonList(req.DesiredTitles), SearchPreferences: jsonObjectFromText(req.SearchPreferences), BlockedCompanies: jsonList(req.BlockedCompanies), MatcherName: strings.TrimSpace(req.MatcherName)}
 	_, err := s.DB.ExecContext(r.Context(), `INSERT INTO user_configs(user_id, resume_text, experience_text, desired_titles_json, search_preferences_json, blocked_companies_json, matcher_name)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET resume_text=excluded.resume_text, experience_text=excluded.experience_text, desired_titles_json=excluded.desired_titles_json, search_preferences_json=excluded.search_preferences_json, blocked_companies_json=excluded.blocked_companies_json, matcher_name=excluded.matcher_name, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`, u.ID, resume, experience, profile.DesiredTitles, profile.SearchPreferences, profile.BlockedCompanies, nullString(profile.MatcherName))
+		ON CONFLICT(user_id) DO UPDATE SET resume_text=excluded.resume_text, experience_text=excluded.experience_text, desired_titles_json=excluded.desired_titles_json, search_preferences_json=excluded.search_preferences_json, blocked_companies_json=excluded.blocked_companies_json, matcher_name=excluded.matcher_name, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`, u.ID, profile.Resume, profile.Experience, profile.DesiredTitles, profile.SearchPreferences, profile.BlockedCompanies, nullString(profile.MatcherName))
 	if err != nil {
 		s.writeAPIError(w, http.StatusInternalServerError, "profile_save_failed", "Profile save failed")
 		return
 	}
-	end := s.Now().UTC()
-	start := end.AddDate(0, 0, -7)
-	if err := s.MatchRunner.RunPriorWeek(r.Context(), u.ID, start, end); err != nil {
+	profile.HasProfile = true
+	profile.DocumentCount = s.documentCount(r.Context(), u.ID)
+	if hadProfile == 0 {
+		if err := s.runPriorWeek(r.Context(), r, u.ID); err != nil {
+			_, _ = s.DB.ExecContext(r.Context(), `DELETE FROM user_configs WHERE user_id = ?`, u.ID)
+			s.writeAPIError(w, http.StatusBadGateway, "match_kickoff_failed", "Profile saved but initial match run failed")
+			return
+		}
+		profile.LastMatchRunMessage = "Profile saved and initial match run requested."
+	} else {
+		profile.LastMatchRunMessage = "Profile saved."
+	}
+	s.recordHistory(r.Context(), u.ID, "profile_saved", clientIP(r), map[string]any{"initial_match_run": hadProfile == 0})
+	s.writeJSON(w, http.StatusOK, map[string]any{"profile": profile, "message": profile.LastMatchRunMessage})
+}
+
+func (s *Server) apiRequestMatchRun(w http.ResponseWriter, r *http.Request, u *user) {
+	if !s.validCSRF(r) {
+		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
+		return
+	}
+	var exists int
+	if err := s.DB.QueryRowContext(r.Context(), `SELECT 1 FROM user_configs WHERE user_id = ?`, u.ID).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			s.writeAPIError(w, http.StatusConflict, "profile_required", "Save your profile before requesting a match run")
+			return
+		}
+		s.writeAPIError(w, http.StatusInternalServerError, "profile_check_failed", "Failed to check profile existence")
+		return
+	}
+	if err := s.runPriorWeek(r.Context(), r, u.ID); err != nil {
 		s.writeAPIError(w, http.StatusBadGateway, "match_kickoff_failed", "Match kickoff failed")
 		return
 	}
-	s.recordHistory(r.Context(), u.ID, "profile_saved", clientIP(r), map[string]any{"match_window_start": start.Format(time.RFC3339Nano), "match_window_end": end.Format(time.RFC3339Nano)})
-	profile.LastMatchRunMessage = "Saved; prior-week match run requested."
-	s.writeJSON(w, http.StatusOK, map[string]any{"profile": profile, "message": profile.LastMatchRunMessage})
+	s.writeJSON(w, http.StatusAccepted, map[string]string{"message": "Prior-week match run requested."})
+}
+
+func (s *Server) runPriorWeek(ctx context.Context, r *http.Request, userID int64) error {
+	end := s.Now().UTC()
+	start := end.AddDate(0, 0, -7)
+	if err := s.MatchRunner.RunPriorWeek(ctx, userID, start, end); err != nil {
+		return err
+	}
+	s.recordHistory(ctx, userID, "match_run_requested", clientIP(r), map[string]any{"match_window_start": start.Format(time.RFC3339Nano), "match_window_end": end.Format(time.RFC3339Nano)})
+	return nil
 }
 
 func (s *Server) apiJobsList(w http.ResponseWriter, r *http.Request, u *user) {
@@ -628,12 +682,17 @@ func (s *Server) createSignupAndIssueCode(ctx context.Context, email string, has
 		return err
 	}
 	committed = true
-	// The signup/code rows are now durable. If external delivery fails, surface
-	// the error without attempting rollback; the committed code will expire by
-	// the normal auth-code expiry path.
-	if err := s.Notifier.SendCode(ctx, email, code); err != nil {
-		return fmt.Errorf("%w: %v", errCodeDelivery, err)
-	}
+	// The signup/code rows are now durable. Delivery happens asynchronously so
+	// the signup response (and the page transition to the code-entry screen)
+	// never waits on SMTP. If delivery fails, the committed code still expires
+	// by the normal auth-code expiry path; the user can request a new code.
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	go func() {
+		defer cancel()
+		if err := s.Notifier.SendCode(sendCtx, email, code); err != nil {
+			log.Printf("signup code delivery to %s failed asynchronously: %v", email, err)
+		}
+	}()
 	return nil
 }
 

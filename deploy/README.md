@@ -19,13 +19,33 @@ For local frontend checks outside Docker, run the same commands from `frontend/`
 ## Required runtime configuration
 
 - `JOBS_ADMIN_TOKEN`: bearer token required for `/admin` pages.
-- `JOBS_SMTP_ADDR`, `JOBS_SMTP_USERNAME`, `JOBS_SMTP_PASSWORD`: required by the web service at startup for the jobs@willwagner.me outbox. Set all three before starting the deployment. The admin service can start without SMTP configured, but email delivery for an issued token requires valid SMTP settings.
+- `JOBS_SMTP_ADDR`, `JOBS_SMTP_USERNAME`, `JOBS_SMTP_PASSWORD`: required by the web service at startup for the jobs@jobfinder.you outbox. Set all three before starting the deployment. The admin service can start without SMTP configured, but email delivery for an issued token requires valid SMTP settings.
 
 Start locally with:
 
 ```sh
 VERSION=$(cat VERSION) JOBS_ADMIN_TOKEN=dev-token JOBS_SMTP_ADDR=smtp-relay.gmail.com:587 JOBS_SMTP_USERNAME=u JOBS_SMTP_PASSWORD=p docker compose up --build
 ```
+
+## Development vs production stacks
+
+The repository ships two compose files, and they never share state:
+
+| | Production (`docker-compose.yml`) | Development (`docker-compose.dev.yml`) |
+|---|---|---|
+| Project name | `jobfinder` (from directory) | pinned: `jobfinder-dev` |
+| Volume | `jobfinder_jobs-data` | pinned: `jobfinder-dev-data` |
+| Web port | 8080 | 8090 |
+| Admin port | 8081 | 8091 |
+| SMTP | real credentials required | dummies (mail fails silently) |
+| Admin token | required env | defaults to `dev-admin-token` |
+
+Launch the dev stack with `./scripts/dev.sh up` (also `down`, `reset`, `status`,
+`logs`). The fixed project and volume names mean the dev database persists
+across launches from any directory; `./scripts/dev.sh reset` wipes only the dev
+volume and can never touch production. Running production from a different
+directory is safe for the same reason: its volume is always
+`<project>_jobs-data`, and the pinned dev names cannot collide with it.
 
 ## External reverse proxy
 

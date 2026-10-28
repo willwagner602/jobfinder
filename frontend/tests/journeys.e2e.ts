@@ -18,7 +18,8 @@ test.describe('browser-level user journeys', () => {
     await page.getByRole('button', { name: 'Create account and send code' }).click();
 
     await expect(page).toHaveURL(/\/verify\?email=preview\.user@example\.test/);
-    await expect(page.getByLabel('Email')).toHaveValue(defaultUser.email);
+    await expect(page.getByTestId('verification-email-notice')).toContainText(`We've sent an email to ${defaultUser.email}`);
+    await expect(page.getByLabel('Email')).toHaveCount(0);
     expect(state.calls.find((call) => call.path === '/api/signup')?.body).toMatchObject({
       email: defaultUser.email,
       password: 'correct horse battery staple',
@@ -28,7 +29,7 @@ test.describe('browser-level user journeys', () => {
     await page.getByRole('button', { name: 'Verify and continue' }).click();
 
     await expect(page).toHaveURL(/\/onboarding$/);
-    await expect(page.getByLabel('Resume text')).toHaveValue(defaultProfile.resumeText);
+    await expect(page.getByLabel('Upload Documents')).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/verify')?.body).toEqual({
       email: defaultUser.email,
       code: defaultUser.verificationCode,
@@ -39,13 +40,16 @@ test.describe('browser-level user journeys', () => {
     const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByLabel('Email').fill(defaultUser.email);
-    await page.getByLabel('Password').fill('password');
+    await page.getByLabel('Password', { exact: true }).fill('password');
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
 
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.getByRole('link', { name: 'Dashboard', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /Log out/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Update resume and experience' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'View job matches' })).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/login')?.body).toMatchObject({ email: defaultUser.email, password: 'password' });
 
     await page.getByRole('button', { name: /Log out/ }).click();
@@ -58,42 +62,67 @@ test.describe('browser-level user journeys', () => {
     const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByLabel('Email').fill(defaultUser.email);
-    await page.getByRole('button', { name: 'Email me a code' }).click();
+    await page.getByRole('button', { name: 'Send me a one time code' }).click();
 
     await expect(page.getByRole('status')).toContainText('A login code was sent if the account is ready.');
+    await expect(page.getByLabel('One-time code')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use password instead' })).toBeVisible();
     expect(state.calls.find((call) => call.path === '/api/login' && call.body?.sendCode)?.body).toMatchObject({
       email: defaultUser.email,
       sendCode: true,
     });
-  });
 
-  test('edits profile/onboarding fields and shows the saved server message', async ({ page }) => {
-    const state = await installMockApi(page, makeBrowserApiState());
-
-    await page.goto('/onboarding');
-    await expect(page.getByLabel('Resume text')).toHaveValue(defaultProfile.resumeText);
-    await page.getByLabel('Resume text').fill('Updated resume text');
-    await page.getByLabel('Experience bullets').fill('Built deterministic browser tests');
-    await page.getByLabel('Desired titles, one per line').fill('Staff Engineer');
-    await page.getByLabel('Search preferences JSON or notes').fill('Remote only');
-    await page.getByLabel('Blocked companies, one per line').fill('NopeCo');
-    await page.getByLabel('Matcher override').fill('default');
-    await page.getByRole('button', { name: 'Save and request prior-week match run' }).click();
-
-    await expect(page.getByRole('status')).toContainText(defaultProfile.lastMatchRunMessage);
-    expect(state.calls.find((call) => call.path === '/api/profile' && call.method === 'PUT')?.body).toMatchObject({
-      resumeText: 'Updated resume text',
-      experienceText: 'Built deterministic browser tests',
-      desiredTitles: 'Staff Engineer',
+    await page.getByLabel('One-time code').fill(defaultUser.loginCode);
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    expect(state.calls.find((call) => call.path === '/api/login' && call.body?.code)?.body).toMatchObject({
+      email: defaultUser.email,
+      code: defaultUser.loginCode,
     });
   });
 
+  test('redirects unauthenticated visitors from onboarding to login', async ({ page }) => {
+    const state = await installMockApi(page, makeBrowserApiState({ authenticated: false }));
+
+    for (const path of ['/dashboard', '/onboarding', '/jobs', '/jobs/101']) {
+      await page.goto(path);
+      await expect(page).toHaveURL(new RegExp(`/login\\?redirect=${path.replaceAll('/', '\\/')}$`));
+      await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
+    }
+    expect(state.calls.some((call) => ['/api/profile', '/api/dashboard', '/api/jobs'].includes(call.path))).toBe(false);
+  });
+
+  test('uploads documents, edits title and company selections, and saves the profile', async ({ page }) => {
+    const state = await installMockApi(page, makeBrowserApiState());
+
+    await page.goto('/onboarding');
+    await expect(page.getByLabel('Upload Documents')).toBeVisible();
+    await expect(page.getByLabel('Resume text')).toHaveCount(0);
+    await page.getByLabel('Desired titles').fill('Software');
+    await expect(page.getByRole('option', { name: 'Software Engineer' })).toBeVisible();
+    await page.getByRole('option', { name: 'Software Engineer' }).click();
+    await page.getByLabel('Blocked companies').fill('Nope');
+    await expect(page.getByRole('option', { name: 'NopeCo' })).toBeVisible();
+    await page.getByRole('option', { name: 'NopeCo' }).click();
+    await page.getByLabel('Upload Documents').setInputFiles({ name: 'resume.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF') });
+    await expect(page.getByText(/resume\.pdf/)).toBeVisible();
+    await page.getByRole('button', { name: 'Save profile' }).click();
+
+    await expect(page.getByRole('status')).toContainText('Profile saved.');
+    expect(state.calls.find((call) => call.path === '/api/profile' && call.method === 'PUT')?.body).toMatchObject({
+      desiredTitles: 'Staff Platform Engineer\nPrincipal Software Engineer\nSoftware Engineer',
+      blockedCompanies: 'Example BadCo\nNopeCo',
+    });
+    expect(state.calls.some((call) => call.path === '/api/documents' && call.method === 'POST')).toBe(true);
+  });
+
   test('shows dashboard links and navigates through jobs list and detail pages', async ({ page }) => {
-    await installMockApi(page, makeBrowserApiState());
+    await installMockApi(page, makeBrowserApiState({ authenticated: true }));
 
     await page.goto('/dashboard');
-    await expect(page.getByRole('heading', { name: `Welcome, ${defaultUser.email}.` })).toBeVisible();
+    await expect(page.getByRole('heading', { name: new RegExp(`Welcome,\\s*${defaultUser.email}`) })).toBeVisible();
     await page.getByRole('link', { name: 'View job matches' }).click();
 
     await expect(page).toHaveURL(/\/jobs$/);
@@ -155,12 +184,13 @@ test.describe('browser-level user journeys', () => {
     await expect(page.getByRole('alert')).toContainText('Invalid verification code.');
 
     await page.goto('/login');
+    await expect(page.getByLabel('One-time code')).toHaveCount(0);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page.getByLabel('Email')).toHaveJSProperty('validity.valid', false);
     await page.getByLabel('Email').fill(defaultUser.email);
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Enter a password or one-time code.');
-    await page.getByLabel('Password').fill('bad-password');
+    await expect(page.getByRole('alert')).toContainText('Enter your password.');
+    await page.getByLabel('Password', { exact: true }).fill('bad-password');
     await page.getByRole('button', { name: 'Log in', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('Invalid credentials.');
   });

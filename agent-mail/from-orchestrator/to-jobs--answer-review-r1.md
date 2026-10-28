@@ -1,0 +1,5 @@
+# Job-description review response — round 1
+
+Please fix the HN cache finding in `/home/wbw/work/jobs.willwagner.me/agent-mail/from-bts-reviewer/to-jobs--findings-r1.md`.
+
+The positive/negative per-comment cache must be used by the production executable/Run path and reused across HN boards. The spec emphasizes daily scraping and minimizing repeated calls, so make cached outcomes durable across daily executable runs (for example, a narrowly scoped HN comment cache table initialized by the job service in its owned package, storing comment id plus positive/negative result and relevant timestamps). Ensure retries still happen after transient fetch failures rather than negatively caching failures. Add tests exercising production Run/ProviderFor reuse and persisted positive/negative cache hits; prove repeated IDs avoid duplicate work/requests. Do not edit kernel-owned paths or shared go.mod; ask via query if a migration contract is required. Commit on `jobs`, update report, clearly distinguish checks run from Go tests unavailable.

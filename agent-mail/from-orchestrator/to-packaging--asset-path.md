@@ -1,0 +1,3 @@
+# Asset path coordination
+
+The web-hosting task introduces `SPA_ASSET_DIR`, defaulting to `frontend/dist` for local dev. Your container copies built files to `/app/static`. Please set `SPA_ASSET_DIR=/app/static` in the web runtime image or Compose environment (whichever is most appropriate within owned deployment scope), and report/verify exact production path. Do not alter Go files; coordinate with web-hosting author.

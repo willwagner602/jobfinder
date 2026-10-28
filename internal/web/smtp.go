@@ -67,11 +67,11 @@ func (n *SMTPNotifier) SendCode(ctx context.Context, email, code string) error {
 	msg := strings.Join([]string{
 		"From: " + n.Config.From,
 		"To: " + to,
-		"Subject: Your jobs.willwagner.me code",
+		"Subject: Your jobfinder code",
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=utf-8",
 		"",
-		"Your jobs.willwagner.me one-time code is: " + code,
+		"Your jobfinder one-time code is: " + code,
 		"",
 		"This code expires in 15 minutes. If you did not request it, ignore this message.",
 	}, "\r\n")

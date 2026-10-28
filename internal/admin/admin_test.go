@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
 func newTestStore(t *testing.T) Store {

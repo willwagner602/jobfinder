@@ -9,7 +9,11 @@ export type Profile = {
   blockedCompanies?: string;
   matcherName?: string;
   lastMatchRunMessage?: string;
+  hasProfile?: boolean;
+  documentCount?: number;
+  documents?: DocumentInfo[];
 };
+export type DocumentInfo = { id: number; filename: string; contentType: string; sizeBytes: number; createdAt: string };
 export type Job = {
   matchId: number;
   listingId?: number;
@@ -57,6 +61,11 @@ export async function refreshSession(): Promise<SessionState> {
 
 export async function apiGet<T>(path: string): Promise<T> {
   return parseResponse<T>(await fetch(path, { credentials: 'include' }));
+}
+
+export async function csrfToken(): Promise<string> {
+  if (!session.csrfToken) await refreshSession();
+  return session.csrfToken;
 }
 
 export async function apiSend<T>(path: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {

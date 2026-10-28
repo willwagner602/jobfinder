@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 const defaultLLMTimeout = 30 * time.Second

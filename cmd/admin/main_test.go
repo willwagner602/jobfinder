@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/schema"
 )
 
 func TestEnvOrDefault(t *testing.T) {

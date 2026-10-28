@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"jobs.willwagner.me/internal/admin"
-	"jobs.willwagner.me/internal/db"
+	"jobfinder/internal/admin"
+	"jobfinder/internal/db"
 )
 
 func main() {

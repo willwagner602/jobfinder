@@ -4,7 +4,7 @@ This inventory covers interactive controls introduced under `frontend/**` for th
 
 ## Application shell
 
-- Brand/dashboard link: accessible label `jobs.willwagner.me dashboard`; navigates to `/`.
+- Brand/dashboard link: accessible label `jobfinder dashboard`; navigates to `/`.
 - Primary navigation links:
   - `Dashboard` -> `/` when authenticated.
   - `Profile` -> `/onboarding` when authenticated.

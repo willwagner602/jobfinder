@@ -108,6 +108,12 @@ async function driveState(page, row, state) {
 
   await page.goto(`${baseURL}${row.path}`);
 
+  if (state === 'code-entry' && row.page === 'login') {
+    await page.getByLabel('Email').fill('preview.user@example.test');
+    await page.getByRole('button', { name: 'Send me a one time code' }).click();
+    await page.waitForTimeout(100);
+  }
+
   if (state === 'validation-error') {
     if (row.page === 'signup') await page.getByRole('button', { name: 'Create account and send code' }).click();
     if (row.page === 'verify') await page.getByRole('button', { name: 'Verify and continue' }).click();

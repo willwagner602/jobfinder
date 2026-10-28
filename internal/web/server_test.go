@@ -12,47 +12,139 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
-	"jobs.willwagner.me/internal/admin"
-	"jobs.willwagner.me/internal/db"
-	"jobs.willwagner.me/internal/schema"
+	"jobfinder/internal/admin"
+	"jobfinder/internal/db"
+	"jobfinder/internal/schema"
 )
 
-type captureNotifier struct{ codes map[string]string }
+// codeMap is a tiny thread-safe capture store: delivery now happens on another
+// goroutine, so test assertions may read while the send is writing.
+type codeMap struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func (c *codeMap) set(email, code string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]string{}
+	}
+	c.m[email] = code
+}
+
+func (c *codeMap) get(email string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.m[email]
+}
+
+type captureNotifier struct {
+	codes    codeMap
+	sent     chan string
+	sentOnce sync.Once
+}
+
+func (n *captureNotifier) events() chan string {
+	n.sentOnce.Do(func() { n.sent = make(chan string, 16) })
+	return n.sent
+}
+
+func newCaptureNotifier() *captureNotifier { return &captureNotifier{} }
+
+// awaitCode waits for the async signup delivery to record a code for email.
+func (n *captureNotifier) awaitCode(t *testing.T, email string) string {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-n.events():
+			if e == email {
+				return n.codes.get(email)
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for signup code delivery to %s", email)
+		}
+	}
+}
+
+func (n *captureNotifier) record(email, code string) {
+	n.codes.set(email, code)
+	n.events() <- email
+}
 
 func (n *captureNotifier) SendCode(_ context.Context, email, code string) error {
-	if n.codes == nil {
-		n.codes = map[string]string{}
-	}
-	n.codes[email] = code
+	n.record(email, code)
 	return nil
 }
 
 type failingNotifier struct {
-	codes map[string]string
+	codes codeMap
+	sent  chan string
 	err   error
 }
 
 func (n *failingNotifier) SendCode(_ context.Context, email, code string) error {
-	if n.codes == nil {
-		n.codes = map[string]string{}
-	}
-	n.codes[email] = code
+	n.codes.set(email, code)
+	n.sent <- email
 	if n.err != nil {
 		return n.err
 	}
 	return errors.New("send failed")
 }
 
+func newFailingNotifier(err error) *failingNotifier {
+	return &failingNotifier{err: err, sent: make(chan string, 16)}
+}
+
+// awaitCode waits for the async signup delivery attempt.
+func (n *failingNotifier) awaitCode(t *testing.T, email string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-n.sent:
+			if e == email {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for signup code delivery attempt to %s", email)
+		}
+	}
+}
+
 type commitAwareNotifier struct {
 	t       *testing.T
 	db      *sql.DB
 	userID  int64
-	codes   map[string]string
+	codes   codeMap
 	checked bool
+	sent    chan string
+}
+
+func newCommitAwareNotifier(t *testing.T, db *sql.DB, userID int64) *commitAwareNotifier {
+	return &commitAwareNotifier{t: t, db: db, userID: userID, sent: make(chan string, 16)}
+}
+
+// awaitCode waits for the async signup delivery to reach the notifier.
+func (n *commitAwareNotifier) awaitCode(t *testing.T, email string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-n.sent:
+			if e == email {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for signup code delivery to %s", email)
+		}
+	}
 }
 
 func (n *commitAwareNotifier) SendCode(_ context.Context, email, code string) error {
@@ -67,10 +159,8 @@ func (n *commitAwareNotifier) SendCode(_ context.Context, email, code string) er
 	if _, err := n.db.Exec(`UPDATE users SET updated_at = updated_at WHERE user_id = ?`, n.userID); err != nil {
 		n.t.Fatalf("write during SendCode failed; signup transaction may still be open: %v", err)
 	}
-	if n.codes == nil {
-		n.codes = map[string]string{}
-	}
-	n.codes[email] = code
+	n.codes.set(email, code)
+	n.sent <- email
 	return nil
 }
 
@@ -174,7 +264,7 @@ func TestSPARouteFallbackDoesNotShadowReservedRoutes(t *testing.T) {
 }
 
 func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
-	notifier := &captureNotifier{}
+	notifier := newCaptureNotifier()
 	runner := &captureRunner{}
 	s := newTestServer(t)
 	s.Notifier = notifier
@@ -183,12 +273,13 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 
 	csrf, cookies := getCSRF(t, h, "/signup")
 	postForm(t, h, "/signup", url.Values{"email": {"User@Example.COM"}, "password": {"correct horse battery staple"}, "csrf": {csrf}}, cookies)
-	if notifier.codes["user@example.com"] == "" {
+	code := notifier.awaitCode(t, "user@example.com")
+	if code == "" {
 		t.Fatal("signup did not send verification code")
 	}
 
 	csrf, cookies = getCSRF(t, h, "/verify?email=user%40example.com")
-	verifyRec := postForm(t, h, "/verify", url.Values{"email": {"user@example.com"}, "code": {notifier.codes["user@example.com"]}, "csrf": {csrf}}, cookies)
+	verifyRec := postForm(t, h, "/verify", url.Values{"email": {"user@example.com"}, "code": {code}, "csrf": {csrf}}, cookies)
 	if verifyRec.Code != http.StatusSeeOther || verifyRec.Header().Get("Location") != "/onboarding" {
 		t.Fatalf("verify got %d location %q", verifyRec.Code, verifyRec.Header().Get("Location"))
 	}
@@ -222,7 +313,7 @@ func TestSignupVerifyLoginAndOnboarding(t *testing.T) {
 }
 
 func TestJSONAPISignupVerifyLoginProfileAndJobs(t *testing.T) {
-	notifier := &captureNotifier{}
+	notifier := newCaptureNotifier()
 	runner := &captureRunner{}
 	s := newTestServer(t)
 	s.Notifier = notifier
@@ -234,12 +325,13 @@ func TestJSONAPISignupVerifyLoginProfileAndJobs(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("api signup status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if notifier.codes["api@example.com"] == "" {
+	apiCode := notifier.awaitCode(t, "api@example.com")
+	if apiCode == "" {
 		t.Fatal("api signup did not send verification code")
 	}
 
 	csrf, _ = getAPICSRF(t, h, cookies)
-	verifyRec := postJSON(t, h, "/api/verify", map[string]string{"email": "api@example.com", "code": notifier.codes["api@example.com"]}, csrf, cookies)
+	verifyRec := postJSON(t, h, "/api/verify", map[string]string{"email": "api@example.com", "code": apiCode}, csrf, cookies)
 	if verifyRec.Code != http.StatusOK {
 		t.Fatalf("api verify status=%d body=%s", verifyRec.Code, verifyRec.Body.String())
 	}
@@ -316,7 +408,7 @@ func TestSignupDisabledBlocksSignup(t *testing.T) {
 	if users != 0 {
 		t.Fatalf("users created = %d, want 0", users)
 	}
-	if notifier.codes["closed@example.com"] != "" {
+	if notifier.codes.get("closed@example.com") != "" {
 		t.Fatal("signup sent verification code while disabled")
 	}
 }
@@ -345,13 +437,13 @@ func TestSignupRefusesTombstonedEmail(t *testing.T) {
 	if users != 1 {
 		t.Fatalf("users with tombstoned email = %d, want 1", users)
 	}
-	if notifier.codes["gone@example.com"] != "" {
+	if notifier.codes.get("gone@example.com") != "" {
 		t.Fatal("signup sent verification code for tombstoned email")
 	}
 }
 
 func TestSignupStillHandlesSuspendedEmailWithExistingUpsert(t *testing.T) {
-	notifier := &captureNotifier{}
+	notifier := newCaptureNotifier()
 	s := newTestServer(t)
 	s.Notifier = notifier
 	if _, err := s.DB.Exec(`INSERT INTO users(email, status) VALUES (?, ?)`, "suspended@example.com", schema.UserStatusSuspended); err != nil {
@@ -364,7 +456,7 @@ func TestSignupStillHandlesSuspendedEmailWithExistingUpsert(t *testing.T) {
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/verify?email=suspended%40example.com" {
 		t.Fatalf("signup status=%d location=%q body=%s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
-	if notifier.codes["suspended@example.com"] == "" {
+	if notifier.awaitCode(t, "suspended@example.com") == "" {
 		t.Fatal("signup did not send verification code for suspended email")
 	}
 	var users int
@@ -404,7 +496,7 @@ func TestSignupTransactionRechecksTombstoneAfterEarlierLiveObservation(t *testin
 	if users != 1 {
 		t.Fatalf("users with raced email = %d, want 1", users)
 	}
-	if notifier.codes["race@example.com"] != "" {
+	if notifier.codes.get("race@example.com") != "" {
 		t.Fatal("signup sent verification code after tombstone")
 	}
 }
@@ -455,7 +547,8 @@ func TestSignupImmediateTransactionBlocksConcurrentTombstone(t *testing.T) {
 	if status != string(schema.UserStatusLive) {
 		t.Fatalf("status after blocked tombstone = %q, want live", status)
 	}
-	if notifier.codes["locked@example.com"] == "" {
+	notifier.awaitCode(t, "locked@example.com")
+	if notifier.codes.get("locked@example.com") == "" {
 		t.Fatal("signup did not send verification code")
 	}
 }
@@ -474,32 +567,33 @@ func TestSignupSendsCodeAfterCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	uid := insertLiveUser(t, conn, "after-commit@example.com")
-	notifier := &commitAwareNotifier{t: t, db: conn, userID: uid}
+	notifier := newCommitAwareNotifier(t, conn, uid)
 	s := &Server{DB: conn, Notifier: notifier, MatchRunner: &captureRunner{}, SessionKey: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return time.Date(2025, 1, 8, 12, 0, 0, 0, time.UTC) }}
 
 	if err := s.createSignupAndIssueCode(context.Background(), "after-commit@example.com", sql.NullString{}, "127.0.0.1", nil); err != nil {
 		t.Fatalf("createSignupAndIssueCode: %v", err)
 	}
+	notifier.awaitCode(t, "after-commit@example.com")
 	if !notifier.checked {
 		t.Fatal("notifier was not called")
 	}
-	if notifier.codes["after-commit@example.com"] == "" {
+	if notifier.codes.get("after-commit@example.com") == "" {
 		t.Fatal("notifier did not capture code")
 	}
 }
 
 func TestSignupSendFailureAfterCommitKeepsRows(t *testing.T) {
-	notifier := &failingNotifier{err: errors.New("smtp down")}
+	notifier := newFailingNotifier(errors.New("smtp down"))
 	s := newTestServer(t)
 	s.Notifier = notifier
 
+	// Delivery is asynchronous: a send failure must not fail the signup and must
+	// not roll back the committed user/code rows.
 	err := s.createSignupAndIssueCode(context.Background(), "durable@example.com", sql.NullString{}, "127.0.0.1", nil)
-	if !errors.Is(err, errCodeDelivery) {
-		t.Fatalf("createSignupAndIssueCode error = %v, want errCodeDelivery", err)
+	if err != nil {
+		t.Fatalf("createSignupAndIssueCode error = %v, want nil (delivery is async)", err)
 	}
-	if notifier.codes["durable@example.com"] == "" {
-		t.Fatal("notifier was not called")
-	}
+	notifier.awaitCode(t, "durable@example.com")
 	var userID int64
 	if err := s.DB.QueryRow(`SELECT user_id FROM users WHERE email = ? AND status = ?`, "durable@example.com", schema.UserStatusPending).Scan(&userID); err != nil {
 		t.Fatalf("committed user missing after send failure: %v", err)
@@ -516,6 +610,48 @@ func TestSignupSendFailureAfterCommitKeepsRows(t *testing.T) {
 	}
 }
 
+type blockingNotifier struct {
+	codes   codeMap
+	release chan struct{}
+}
+
+func (n *blockingNotifier) SendCode(_ context.Context, email, code string) error {
+	<-n.release
+	n.codes.set(email, code)
+	return nil
+}
+
+func TestSignupRespondsBeforeAsyncDeliveryCompletes(t *testing.T) {
+	notifier := &blockingNotifier{release: make(chan struct{})}
+	s := newTestServer(t)
+	s.Notifier = notifier
+	h := s.Routes()
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		c, ck := getAPICSRF(t, h, nil)
+		done <- postJSON(t, h, "/api/signup", map[string]string{"email": "async@example.com", "password": "correct horse battery staple"}, c, ck)
+	}()
+	select {
+	case rec := <-done:
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("api signup status=%d, want %d (must not wait for SMTP)", rec.Code, http.StatusAccepted)
+		}
+	case <-time.After(2 * time.Second):
+		close(notifier.release)
+		t.Fatal("api signup blocked until delivery completed")
+	}
+	close(notifier.release)
+	deadline := time.After(2 * time.Second)
+	for notifier.codes.get("async@example.com") == "" {
+		select {
+		case <-deadline:
+			t.Fatal("async delivery never completed")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestSignupDoesNotSendCodeWhenTransactionFailsBeforeCommit(t *testing.T) {
 	notifier := &captureNotifier{}
 	s := newTestServer(t)
@@ -528,7 +664,7 @@ func TestSignupDoesNotSendCodeWhenTransactionFailsBeforeCommit(t *testing.T) {
 	if !errors.Is(err, errSignupsDisabled) {
 		t.Fatalf("createSignupAndIssueCode error = %v, want errSignupsDisabled", err)
 	}
-	if notifier.codes["nosend@example.com"] != "" {
+	if notifier.codes.get("nosend@example.com") != "" {
 		t.Fatal("notifier sent code on pre-commit refusal")
 	}
 	var users int
@@ -548,7 +684,7 @@ func TestCodeIsConsumedOnce(t *testing.T) {
 	if err := s.issueCode(context.Background(), "code@example.com", "login", "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
-	code := notifier.codes["code@example.com"]
+	code := notifier.codes.get("code@example.com")
 	if code == "" {
 		t.Fatal("no code captured")
 	}
@@ -609,7 +745,7 @@ func TestCodeReplayDoesNotRecordSecondUse(t *testing.T) {
 	if err := s.issueCode(context.Background(), "history@example.com", "login", "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
-	code := notifier.codes["history@example.com"]
+	code := notifier.codes.get("history@example.com")
 	if !s.verifyCode(context.Background(), uid, code, "login") {
 		t.Fatal("first code use failed")
 	}

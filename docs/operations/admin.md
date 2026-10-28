@@ -15,7 +15,7 @@ Optional mail outbox environment:
 - `JOBS_SMTP_ADDR`
 - `JOBS_SMTP_USERNAME`
 - `JOBS_SMTP_PASSWORD`
-- `JOBS_SMTP_FROM` (defaults to `jobs@willwagner.me`)
+- `JOBS_SMTP_FROM` (defaults to `jobs@jobfinder.you`)
 
 Without SMTP settings, token issuance returns the token in the HTTP response and does not attempt live email delivery.
 

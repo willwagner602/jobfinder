@@ -1,0 +1,5 @@
+# Reconcile PR #5 after UI and packaging merges
+
+PR #2 Vue UI merged as `8613d46051064997db57f7ffe9062ddda34ba6cb`; PR #3 browser tests/screenshots merged as `4ed98c5becf93a27bd18ae43f3a841a70aedaf12`; PR #4 packaging merged as `720d850ff2a0ca0b44687f747ab024347a3e845b`. PR #5 (`web-hosting`) remains open at `27cba75d86768243ef51a160c10ba7560533516f` and GitHub reports it conflicts with current `master`.
+
+Please resume your original web-hosting task. Rebase only the Go hosting commits onto latest `origin/master`, avoiding duplicate Vue/test/packaging commits. Preserve SPA routing/asset-serving behavior and the clean review scope. Push to the same PR branch (use force-with-lease only if needed), do not merge. Run `go test ./...`, `cd frontend && npm ci && npm test && npm run test:e2e && npm run build`, and `git diff --check`; also verify the final PR diff includes only hosting-owned paths and the SPA asset contract aligns with `/app/static`. Report exact commands/results, new head, and GitHub mergeability/CI. If a conflict needs scope/product judgment, stop and report it.

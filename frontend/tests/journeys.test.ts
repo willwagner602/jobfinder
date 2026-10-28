@@ -31,7 +31,8 @@ describe('browser-level user journeys', () => {
       password: 'correct horse battery staple',
     });
     expect(router.currentRoute.value.path).toBe('/verify');
-    expect(wrapper.get<HTMLInputElement>('#verify-email').element.value).toBe(testUser.email);
+    expect(wrapper.get('[data-testid="verification-email-notice"]').text()).toContain(`We've sent an email to ${testUser.email}`);
+    expect(wrapper.find('#verify-email').exists()).toBe(false);
 
     await wrapper.get('#verify-code').setValue('123456');
     await wrapper.get('form').trigger('submit');
@@ -63,24 +64,25 @@ describe('browser-level user journeys', () => {
     expect(wrapper.text()).toContain('Sign up');
   });
 
-  it('edits profile/onboarding fields and shows the saved server message', async () => {
+  it('saves title and company selections without text boxes', async () => {
     const { wrapper, api } = await mountApp('/onboarding');
 
-    expect(wrapper.get<HTMLTextAreaElement>('#resume-text').element.value).toBe(populatedProfile.resumeText);
-    await wrapper.get('#resume-text').setValue('Updated resume text');
-    await wrapper.get('#experience-text').setValue('Built deterministic browser tests');
-    await wrapper.get('#desired-titles').setValue('Staff Engineer');
-    await wrapper.get('#search-preferences').setValue('Remote only');
-    await wrapper.get('#blocked-companies').setValue('NopeCo');
-    await wrapper.get('#matcher-name').setValue('default');
+    expect(wrapper.text()).toContain('Upload Documents');
+    expect(wrapper.find('#resume-text').exists()).toBe(false);
+    await wrapper.get('#title-search').setValue('Software');
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    await wrapper.get('[role="option"]').trigger('click');
+    await wrapper.get('#company-search').setValue('Example');
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    await wrapper.get('[role="option"]').trigger('click');
     await wrapper.get('form').trigger('submit');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(api.calls.find((call) => call.path === '/api/profile' && call.init?.method === 'PUT')?.body).toMatchObject({
-      resumeText: 'Updated resume text',
-      experienceText: 'Built deterministic browser tests',
+      desiredTitles: 'Staff Platform Engineer\nPrincipal Software Engineer\nSoftware Engineer',
+      blockedCompanies: 'Example BadCo',
     });
-    expect(wrapper.text()).toContain('Saved; prior-week match run requested.');
+    expect(wrapper.text()).toContain('Profile saved.');
   });
 
   it('shows dashboard links and navigates through jobs list and detail pages', async () => {

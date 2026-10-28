@@ -1,0 +1,5 @@
+# Kernel review response — round 2
+
+Please fix the critical migration-safety finding at `/home/wbw/work/jobs.willwagner.me/agent-mail/from-bts-reviewer/to-kernel--findings-r2.md`.
+
+Migration 2 rebuilds `job_listing_versions` by dropping it while `job_matches` may reference it, and the v1 upgrade fixture currently lacks a dependent match row. Implement a SQLite-safe migration that upgrades real v1 DBs with existing listing versions and matches; preserve all rows and keep foreign-key integrity. Add fixture/test coverage with a v1 listing, version, user, and match row, assert upgrade succeeds, both version and match are preserved, and run `PRAGMA foreign_key_check` after migration. Keep the A→B→A fix and its test. Work only in kernel-owned paths, commit on branch `kernel`, and update the report with verification/toolchain limitations.

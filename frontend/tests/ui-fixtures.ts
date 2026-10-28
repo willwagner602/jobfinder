@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 export const testUser = { email: 'preview.user@example.test' };
 
 export const populatedProfile = {
+  hasProfile: true,
   resumeText: 'Staff engineer with Vue, Go, and platform experience.',
   experienceText: 'Led API migrations\nImproved job matching reliability',
   desiredTitles: 'Staff Platform Engineer\nPrincipal Software Engineer',
@@ -68,7 +69,7 @@ export function installMockApi(overrides: MockApiState = {}) {
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
     calls.push({ path, init, body });
     const failure = state.fail[path];
-    if (failure) return json({ error: { code: failure.code, message: failure.message } }, failure.status);
+    if (failure && !(path === '/api/login' && body?.sendCode)) return json({ error: { code: failure.code, message: failure.message } }, failure.status);
 
     if (path === '/api/session') {
       return json({ authenticated: state.authenticated, csrfToken: state.csrfToken, user: state.authenticated ? state.user : undefined });
@@ -90,11 +91,17 @@ export function installMockApi(overrides: MockApiState = {}) {
       return json({ status: 'logged_out' });
     }
     if (path === '/api/dashboard') return json({ user: state.user, profile: state.profile, recentJobs: state.jobs.slice(0, 1) });
-    if (path === '/api/profile' && !init?.method) return json({ user: state.user, profile: state.profile });
+    if (path === '/api/profile' && !init?.method) return json({ user: state.user, profile: { ...state.profile, hasProfile: true, documentCount: 0 } });
+    if (path === '/api/documents' && !init?.method) return json({ documents: [] });
+    if (path === '/api/documents' && init?.method === 'POST') return json({ document: { id: 1, filename: 'resume.pdf', contentType: 'application/pdf', sizeBytes: 4, createdAt: '2026-01-01T00:00:00Z' } }, 201);
+    if (path.startsWith('/api/titles')) return json({ items: ['Software Engineer', 'Software Architect'] });
+    if (path.startsWith('/api/companies')) return json({ items: ['Example BadCo', 'NopeCo'] });
     if (path === '/api/profile' && init?.method === 'PUT') {
-      state.profile = { ...state.profile, ...body, lastMatchRunMessage: 'Saved; prior-week match run requested.' };
+      const firstSave = !state.profile.hasProfile;
+      state.profile = { ...state.profile, ...body, hasProfile: true, lastMatchRunMessage: firstSave ? 'Profile saved and initial match run requested.' : 'Profile saved.' };
       return json({ profile: state.profile, message: state.profile.lastMatchRunMessage });
     }
+    if (path === '/api/match-runs' && init?.method === 'POST') return json({ message: 'Prior-week match run requested.' }, 202);
     if (path === '/api/jobs') return json({ jobs: state.jobs });
     if (path.startsWith('/api/jobs/')) {
       const matchId = Number(path.split('/').pop());
