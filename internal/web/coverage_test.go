@@ -908,6 +908,39 @@ func TestJSONAPIValidationAndFailureBranches(t *testing.T) {
 	})
 }
 
+func TestJSONAPIMatchRunBranches(t *testing.T) {
+	t.Run("missing profile", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "match-no-profile@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		rec := postJSON(t, h, "/api/match-runs", map[string]string{}, csrf, cookies)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("missing profile status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("database failure", func(t *testing.T) {
+		s := newTestServer(t)
+		uid := insertLiveUser(t, s.DB, "match-db-failure@example.com")
+		h := s.Routes()
+		cookies := []*http.Cookie{sessionCookieFor(t, s, uid)}
+		csrf, extra := getAPICSRF(t, h, cookies)
+		cookies = append(cookies, extra...)
+		s.DB.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/match-runs", strings.NewReader(`{}`))
+		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: csrf})
+		req.Header.Set("X-CSRF-Token", csrf)
+		rec := httptest.NewRecorder()
+		s.apiRequestMatchRun(rec, req, &user{ID: uid})
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("database failure status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
 func TestJSONAPIProfileAndJobErrorBranches(t *testing.T) {
 	t.Run("profile validation and runner failure", func(t *testing.T) {
 		s := newTestServer(t)

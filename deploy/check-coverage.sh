@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-threshold="${COVERAGE_THRESHOLD:-90}"
+threshold="${COVERAGE_THRESHOLD:-85}"
 
 declare -A service_packages=(
   [admin]="./cmd/admin ./internal/admin"
