@@ -16,6 +16,7 @@ var migration6 = []string{
 	`ALTER TABLE companies ADD COLUMN normalized_name TEXT`,
 	`UPDATE companies SET normalized_name=lower(trim(name))`,
 	`CREATE UNIQUE INDEX idx_companies_normalized_name ON companies(normalized_name)`,
+	`ALTER TABLE companies ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '[]'`,
 	`CREATE TABLE company_aliases (
 		alias_id INTEGER PRIMARY KEY,
 		company_id INTEGER NOT NULL REFERENCES companies(company_id) ON DELETE CASCADE,
@@ -50,7 +51,11 @@ func applyMigration6(ctx context.Context, tx *sql.Tx) error {
 	if err := execAll(ctx, tx, migration6); err != nil {
 		return err
 	}
-	return migrateCompanyCareerResearch(ctx, tx, loadRootRecoveries(rootRecoveryDefaultPath))
+	recovery, err := loadRootRecoveries(rootRecoveryDefaultPath)
+	if err != nil {
+		return err
+	}
+	return migrateCompanyCareerResearch(ctx, tx, recovery)
 }
 
 // RootRecovery is one record from scripts/url_root_recovery.py output.
@@ -61,14 +66,19 @@ type rootRecovery struct {
 }
 
 // rootRecoveryDefaultPath is resolved relative to the process working
-// directory; when absent the migration degrades to evidence-only for all
-// problematic URLs, which is the safe default.
+// directory. The migration requires this file to exist for production deployments
+// to prevent irreversible data loss from dropping company_careers without
+// applying recovery data.
 var rootRecoveryDefaultPath = filepath.Join("artifacts", "url-root-recovery", "results.jsonl")
 
-func loadRootRecoveries(path string) map[string]rootRecovery {
+func loadRootRecoveries(path string) (map[string]rootRecovery, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		// In production, this is a hard requirement - fail the migration if missing
+		if os.IsNotExist(err) && isProduction() {
+			return nil, fmt.Errorf("migration 6 requires recovery file at %s for production deployments: %w", path, err)
+		}
+		return nil, nil
 	}
 	out := map[string]rootRecovery{}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -87,7 +97,12 @@ func loadRootRecoveries(path string) map[string]rootRecovery {
 		}
 		out[rec.SourceID] = rootRecovery{RecoveredURL: rec.RecoveredURL, CandidateURL: rec.CandidateURL, Tier: rec.Tier}
 	}
-	return out
+	return out, nil
+}
+
+// isProduction returns true if running in a production environment
+func isProduction() bool {
+	return os.Getenv("ENVIRONMENT") == "production" || os.Getenv("GO_ENV") == "production"
 }
 
 var (
@@ -217,17 +232,28 @@ func migrateCompanyCareerResearch(ctx context.Context, tx *sql.Tx, recovery map[
 				evidenceAny["recovery"] = map[string]string{"tier": "recovered-unverified", "original_careers_page": page, "category": category}
 			}
 		}
+		evidence, _ := json.Marshal(evidenceAny)
+		
 		if siteURL == "" {
-			// Evidence-only: identity preserved as a company; unusable careers URL
-			// is not promoted to a site record.
+			// Evidence-only: preserve research metadata in company metadata_json
+			// even though we don't create a site row
+			evidenceMeta, _ := json.Marshal(map[string]any{
+				"evidence_only": true,
+				"careers_page": page,
+				"category": category,
+				"evidence": evidenceAny,
+			})
+			_, err = tx.ExecContext(ctx, `UPDATE companies SET metadata_json=json_insert(COALESCE(metadata_json,'[]'),'$[#]',json(?)) WHERE company_id=?`, string(evidenceMeta), companyID)
+			if err != nil {
+				return fmt.Errorf("migrate evidence-only row %s: %w", r.id, err)
+			}
 			continue
 		}
-		evidence, _ := json.Marshal(evidenceAny)
 		_, err = tx.ExecContext(ctx, `INSERT INTO company_job_sites(company_id,site_url,official_site,ats_type,identity_status,organization_type,metadata_json,discovered_at)
 			VALUES(?,?,?,?,?,?,json_array(json(?)),?) ON CONFLICT(company_id,site_url) DO UPDATE SET
 			official_site=COALESCE(excluded.official_site,company_job_sites.official_site),
 			ats_type=COALESCE(excluded.ats_type,company_job_sites.ats_type),
-			identity_status=excluded.identity_status,
+			identity_status=COALESCE(excluded.identity_status,company_job_sites.identity_status),
 			organization_type=COALESCE(excluded.organization_type,company_job_sites.organization_type),
 			metadata_json=json_insert(company_job_sites.metadata_json,'$[#]',json_extract(excluded.metadata_json,'$[0]'))`, companyID, siteURL, nullableString(r.official), nullableString(r.ats), nullableString(r.status), nullableString(r.org), string(evidence), nullableString(r.research))
 		if err != nil {

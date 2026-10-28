@@ -826,13 +826,50 @@ def copy_cached(fo: FetchOutcome) -> FetchOutcome:
     return FetchOutcome(fo.url, fo.final_url, fo.status, fo.sha256, fo.text, fo.links,
                         fo.error, True, fo.elapsed_ms)
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Custom redirect handler that validates each redirect target."""
+    
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Validate the redirect URL
+        try:
+            validate_public_url(newurl)
+        except UnsafeURLError as e:
+            raise urllib.error.HTTPError(
+                req.full_url, code,
+                f"unsafe-redirect: {newurl} ({e})",
+                headers, fp
+            )
+        # Check for redirect loops by tracking visited URLs
+        if not hasattr(req, '_redirect_chain'):
+            req._redirect_chain = []
+        if newurl in req._redirect_chain:
+            raise urllib.error.HTTPError(
+                req.full_url, code,
+                f"redirect-loop detected: {newurl}",
+                headers, fp
+            )
+        req._redirect_chain.append(newurl)
+        # Limit redirect chain length
+        if len(req._redirect_chain) > 10:
+            raise urllib.error.HTTPError(
+                req.full_url, code,
+                f"too-many-redirects (10 max): {newurl}",
+                headers, fp
+            )
+        return urllib.request.HTTPRedirectHandler.redirect_request(
+            self, req, fp, code, msg, headers, newurl
+        )
+
+
 def _urllib_send(url: str, timeout: float = FETCH_TIMEOUT):
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.8"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # Use custom opener with safe redirect handler
+        opener = urllib.request.build_opener(SafeRedirectHandler)
+        with opener.open(req, timeout=timeout) as resp:
             data = resp.read(MAX_RESPONSE_BYTES + 1)
             if len(data) > MAX_RESPONSE_BYTES:
                 return None, b"", url, f"response-too-large:{len(data)}"

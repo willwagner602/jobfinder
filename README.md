@@ -69,7 +69,7 @@ gofmt -l .                      # should print nothing
 
 ## Schema versioning
 
-- Table shapes live in `internal/schema`, which publishes `CurrentVersion` (currently **3**).
+- Table shapes live in `internal/schema`, which publishes `CurrentVersion` (currently **6**).
 - Migrations run at startup via `cmd/orchestrator` (`orchestrator.Startup` → `db.EnsureCurrent`): the database is upgraded from its stored version to `CurrentVersion` before services run.
 - CI verifies a fresh database initializes to `CurrentVersion` and that an upgrade from the checked-in previous-version fixture (`internal/db/testdata/schema_v1.sql`) works.
 - Board status values are `discovered`, `unsupported`, and `active` (`internal/schema/schema.go`).

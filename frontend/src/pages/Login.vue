@@ -14,7 +14,8 @@ async function login() {
   try {
     await apiSend('/api/login', 'POST', { email: form.email, password: codeMode.value ? undefined : form.password, code: codeMode.value ? form.code : undefined });
     await refreshSession();
-    router.push('/dashboard');
+    const redirect = router.currentRoute.value.query.redirect;
+    router.push(redirect ? String(redirect) : '/dashboard');
   } catch (err) { error.value = errorMessage(err); }
   finally { loading.value = false; }
 }

@@ -28,7 +28,7 @@ const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
-  if (['/', '/signup', '/verify', '/login'].includes(to.path)) return true;
+  if (to.meta.requiresAuth === false || ['/', '/signup', '/verify', '/login'].includes(to.path)) return true;
   try {
     if (session.loading || !session.csrfToken) await refreshSession();
   } catch {

@@ -35,10 +35,16 @@ async function loadDocuments() {
 }
 onMounted(async () => {
   try {
-    const [data] = await Promise.all([apiGet<{ profile: Profile }>('/api/profile'), loadDocuments()]);
+    const [data, docs] = await Promise.all([
+      apiGet<{ profile: Profile }>('/api/profile'),
+      loadDocuments().catch(() => ({ documents: [] }))
+    ]);
     form.desiredTitles = parseList(data.profile?.desiredTitles);
     form.blockedCompanies = parseList(data.profile?.blockedCompanies);
     firstSave.value = !data.profile?.hasProfile;
+    if (docs && docs.documents) {
+      documents.value = docs.documents;
+    }
   } catch (err) { error.value = errorMessage(err); }
   finally { loading.value = false; }
 });

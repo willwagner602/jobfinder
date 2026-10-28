@@ -530,8 +530,13 @@ func (s *Server) apiRequestMatchRun(w http.ResponseWriter, r *http.Request, u *u
 		s.writeAPIError(w, http.StatusForbidden, "bad_csrf", "Bad CSRF token")
 		return
 	}
-	if _, err := s.DB.ExecContext(r.Context(), `SELECT 1 FROM user_configs WHERE user_id = ?`, u.ID); err != nil {
-		s.writeAPIError(w, http.StatusConflict, "profile_required", "Save your profile before requesting a match run")
+	var exists int
+	if err := s.DB.QueryRowContext(r.Context(), `SELECT 1 FROM user_configs WHERE user_id = ?`, u.ID).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			s.writeAPIError(w, http.StatusConflict, "profile_required", "Save your profile before requesting a match run")
+			return
+		}
+		s.writeAPIError(w, http.StatusInternalServerError, "profile_check_failed", "Failed to check profile existence")
 		return
 	}
 	if err := s.runPriorWeek(r.Context(), r, u.ID); err != nil {
